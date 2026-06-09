@@ -2,6 +2,7 @@ var selectTags = [];
 var ab = { tags: [], peers: [] };
 var abLoading;
 var abError;
+var abWaitingBrowser = false;
 var current_menu_peer_id = '';
 var current_menu_tag = '';
 
@@ -16,10 +17,22 @@ class AddressBook: Reactor.Component
     
     function render() {
         if (!handler.get_local_option("access_token")) {
+            if (abLoading) {
+                return <div style="margin: *"><progress style="color: #e91e63" /></div>;
+            } else if (abError) {
+                return <div style="margin: *; text-align: center;">{abError}
+                    <div #retry .link style="margin-left: 1em;">{translate("Retry")}</div>
+                </div>;
+            } else if (abWaitingBrowser) {
+                return <div style="margin: *; text-align: center;">
+                    <div style="color: #666; margin-bottom: 1em;">{translate("Waiting for browser authentication...")}</div>
+                    <div #cancel-login .link>{translate("Cancel")}</div>
+                </div>;
+            }
             return <div style="margin: *"><div #login-link .link style="margin: *; width: 100px; text-align: center; font-size: 1.2em;">{translate("Login")}</div></div>;
         }
         if (abLoading) {
-            return <div style="margin: *"><progress style="color: #0071ff" /></div>;
+            return <div style="margin: *"><progress style="color: #e91e63" /></div>;
         } else if (abError) {
             return <div style="margin: *; text-align: center;">{abError}
                 <div #retry .link style="margin-left: 1em;">{translate("Retry")}</div>
@@ -39,7 +52,10 @@ class AddressBook: Reactor.Component
                 </menu>
             </popup>
             <div .left-pane>
-                <div style="padding: 0; padding-bottom: 1em" #tags-label>{translate('Tags')}{svg_menu}</div>
+                <div style="padding: 0; padding-bottom: 1em" #tags-label>
+                    {translate('Tags')}{svg_menu}
+                    <span #logout-link .link style="float: right; font-size: 0.85em; color: #888;">{translate("Logout")}</span>
+                </div>
                 <div #tags>
                     {ab.tags.map(function(t) {
                         return <span class={me.selectedTags.indexOf(t) >= 0 ? "active" : "inactive"}>{t}</span>;
@@ -63,11 +79,27 @@ class AddressBook: Reactor.Component
     }
     
     event click $(#retry) (_, __) {
-        refreshCurrentUser();
+        if (!handler.get_local_option("access_token")) {
+            abError = "";
+            abWaitingBrowser = false;
+            this.update();
+        } else {
+            refreshCurrentUser();
+        }
     }
 
     event click $(#login-link) (_, __) {
-        login();
+        loginWithKeycloak();
+    }
+
+    event click $(#cancel-login) (_, __) {
+        abWaitingBrowser = false;
+        abError = "";
+        this.update();
+    }
+
+    event click $(#logout-link) (_, __) {
+        logoutFromKeycloak();
     }
 
     event click $(#tags-label svg#menu) (_, me) {
@@ -486,7 +518,7 @@ class SessionList: Reactor.Component {
                     }
                 }
             }
-            msgbox("custom-rename", "Rename", "<div .form> \
+            msgbox("custom-rename", translate("Rename"), "<div .form> \
                 <div><input|text name='name' .outline-focus style='width: *; height: 23px', value='" + old_name + "' /></div> \
                 </div> \
                 ", "", function(res=null) {
@@ -512,7 +544,7 @@ class SessionList: Reactor.Component {
                 }
             }
             if (!peer) return;
-            msgbox("custom-edit-tag", "Edit Tag", <SelectTags tags={peer.tags || []} />, "", function(res=null) {
+            msgbox("custom-edit-tag", translate("Edit Tag"), <SelectTags tags={peer.tags || []} />, "", function(res=null) {
                     if (!res) return;
                     peer.tags = selectTags.tags;
                     updateAb();
@@ -663,6 +695,110 @@ function getAb() {
     }, function(err, status) {
         handleAbError(err);
     }, getHttpHeaders());
+}
+
+function loginWithKeycloak() {
+    abLoading = true;
+    abError = "";
+    abWaitingBrowser = false;
+    app.update();
+    httpRequest("http://127.0.0.1:3000/api/auth/init", #post, {}, function(data) {
+        if (!data || !data.url) {
+            abError = "Không thể kết nối tới cổng xác thực";
+            abLoading = false;
+            app.update();
+            return;
+        }
+        handler.open_url(data.url);
+        abLoading = false;
+        abWaitingBrowser = true;
+        app.update();
+        pollKeycloakAuth(data.session_code, 60);
+    }, function(err, _) {
+        abError = "Lỗi khởi tạo xác thực: " + err;
+        abLoading = false;
+        abWaitingBrowser = false;
+        app.update();
+    });
+}
+
+function pollKeycloakAuth(sessionCode, tries) {
+    if (tries <= 0) {
+        abWaitingBrowser = false;
+        abError = "Hết thời gian đăng nhập";
+        app.update();
+        return;
+    }
+    self.timer(2s, function() {
+        if (!abWaitingBrowser) return;
+        httpRequest("http://127.0.0.1:3000/api/auth/status", #post,
+            { session_code: sessionCode },
+            function(data) {
+                if (data && data.access_token) {
+                    abWaitingBrowser = false;
+                    handler.set_local_option("access_token", data.access_token);
+                    getAddressBooks();
+                } else {
+                    pollKeycloakAuth(sessionCode, tries - 1);
+                }
+            },
+            function(err, _) {
+                pollKeycloakAuth(sessionCode, tries - 1);
+            }
+        );
+    });
+}
+
+function getAddressBooks() {
+    abLoading = true;
+    abError = "";
+    app.update();
+    var token = handler.get_local_option("access_token");
+    httpRequest("http://127.0.0.1:3000/api/address-books", #post, {},
+        function(data) {
+            ab.peers = [];
+            ab.tags = [];
+            if (data && data.machines) {
+                var seen = {};
+                data.machines.map(function(m) {
+                    if (m.tag && !seen[m.tag]) { seen[m.tag] = true; ab.tags.push(m.tag); }
+                });
+                data.machines.map(function(m) {
+                    ab.peers.push({
+                        id:       m.rustdesk_id || m.id,
+                        alias:    m.alias       || "",
+                        username: "",
+                        hostname: "",
+                        platform: "",
+                        tags:     m.tag ? [m.tag] : []
+                    });
+                });
+            }
+            abLoading = false;
+            app.update();
+        },
+        function(err, _) {
+            abError = "Lỗi tải dữ liệu: " + err;
+            abLoading = false;
+            app.update();
+        },
+        "Authorization: Bearer " + token
+    );
+}
+
+function logoutFromKeycloak() {
+    var token = handler.get_local_option("access_token");
+    handler.set_local_option("access_token", "");
+    handler.set_local_option("selected-tags", "");
+    ab = { tags: [], peers: [] };
+    app.update();
+    if (token) {
+        httpRequest("http://127.0.0.1:3000/api/auth/logout", #post, {},
+            function(_) {},
+            function(_,__) {},
+            "Authorization: Bearer " + token
+        );
+    }
 }
 
 function updateAb() {

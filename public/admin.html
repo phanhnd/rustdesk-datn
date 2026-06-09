@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ROCKY Admin</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #f0f4f8; color: #222; min-height: 100vh; }
+
+  /* Login */
+  #login-page {
+    display: flex; align-items: center; justify-content: center; min-height: 100vh;
+  }
+  .login-card {
+    background: white; border-radius: 10px; padding: 40px 36px; width: 340px;
+    box-shadow: 0 4px 24px rgba(21,101,192,0.12);
+  }
+  .login-card h1 { color: #1565C0; font-size: 1.6rem; margin-bottom: 6px; }
+  .login-card p  { color: #666; margin-bottom: 24px; font-size: .9rem; }
+  .login-card label { display: block; font-size: .85rem; color: #444; margin-bottom: 4px; }
+  .login-card input {
+    width: 100%; padding: 9px 12px; border: 1px solid #ccc; border-radius: 6px;
+    font-size: .95rem; margin-bottom: 16px; outline: none; transition: border-color .2s;
+  }
+  .login-card input:focus { border-color: #1565C0; }
+  .login-card .err { color: #c62828; font-size: .85rem; margin-bottom: 12px; }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 9px 18px; border: none; border-radius: 6px; cursor: pointer;
+    font-size: .9rem; font-weight: 600; transition: background .2s;
+  }
+  .btn-primary { background: #1565C0; color: white; }
+  .btn-primary:hover { background: #0D47A1; }
+  .btn-danger  { background: #e53935; color: white; }
+  .btn-danger:hover  { background: #b71c1c; }
+  .btn-outline { background: white; color: #1565C0; border: 1.5px solid #1565C0; }
+  .btn-outline:hover { background: #E3F2FD; }
+  .btn-sm { padding: 5px 11px; font-size: .82rem; }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+  .login-card .btn-primary { width: 100%; justify-content: center; }
+
+  /* Shell */
+  #app { display: none; flex-direction: column; min-height: 100vh; }
+  header {
+    background: #1565C0; color: white; padding: 0 24px;
+    display: flex; align-items: center; justify-content: space-between; height: 54px;
+  }
+  header h1 { font-size: 1.2rem; letter-spacing: .5px; }
+
+  nav { background: white; border-bottom: 2px solid #E3F2FD; display: flex; padding: 0 24px; }
+  nav button {
+    padding: 14px 20px; border: none; background: none; cursor: pointer;
+    font-size: .9rem; color: #555; border-bottom: 3px solid transparent; margin-bottom: -2px;
+    font-weight: 500; transition: color .15s;
+  }
+  nav button.active { color: #1565C0; border-bottom-color: #1565C0; }
+  nav button:hover:not(.active) { color: #1565C0; }
+
+  main { padding: 28px; flex: 1; }
+  .tab { display: none; }
+  .tab.active { display: block; }
+
+  h2 { font-size: 1.1rem; color: #1565C0; margin-bottom: 18px; }
+
+  /* Table */
+  .tbl-wrap { overflow-x: auto; border-radius: 8px; box-shadow: 0 1px 6px rgba(0,0,0,.07); }
+  table { width: 100%; border-collapse: collapse; background: white; font-size: .88rem; }
+  th { background: #E3F2FD; color: #1565C0; font-weight: 600; padding: 10px 14px; text-align: left; white-space: nowrap; }
+  td { padding: 9px 14px; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #fafcff; }
+
+  /* Badges */
+  .badge {
+    display: inline-block; padding: 2px 9px; border-radius: 12px;
+    font-size: .75rem; font-weight: 600; margin: 1px 2px;
+  }
+  .badge-blue  { background: #E3F2FD; color: #1565C0; }
+  .badge-green { background: #E8F5E9; color: #2e7d32; }
+  .badge-gray  { background: #eee;    color: #555; }
+  .badge-red   { background: #FFEBEE; color: #c62828; }
+
+  /* Form */
+  .form-row { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+  .form-row input, .form-row select {
+    padding: 8px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: .88rem; outline: none;
+  }
+  .form-row input:focus, .form-row select:focus { border-color: #1565C0; }
+
+  /* Card */
+  .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 16px;
+          box-shadow: 0 1px 6px rgba(0,0,0,.07); }
+  .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .card-header h3 { font-size: 1rem; color: #1565C0; }
+
+  .loading { color: #888; padding: 20px; text-align: center; }
+  .empty   { color: #aaa; padding: 20px; text-align: center; font-style: italic; }
+
+  /* Tags / chips */
+  .tag-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: #E3F2FD; color: #1565C0; border-radius: 14px;
+    padding: 3px 10px; font-size: .8rem; margin: 2px;
+  }
+  .tag-chip button { background: none; border: none; cursor: pointer; color: #1565C0; font-size: .9rem; line-height: 1; padding: 0; }
+
+  /* Modal */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.4);
+    display: flex; align-items: center; justify-content: center; z-index: 999;
+  }
+  .modal-box {
+    background: white; border-radius: 10px; padding: 28px; min-width: 360px;
+    box-shadow: 0 8px 32px rgba(0,0,0,.2); max-height: 90vh; overflow-y: auto;
+  }
+  .modal-box h3 { color: #1565C0; margin-bottom: 16px; }
+  .modal-box label { display: block; font-size: .85rem; color: #444; margin: 10px 0 4px; }
+  .modal-box input, .modal-box select {
+    width: 100%; padding: 8px 12px; border: 1px solid #ccc;
+    border-radius: 6px; font-size: .88rem; outline: none;
+  }
+  .modal-box input:focus, .modal-box select:focus { border-color: #1565C0; }
+  .modal-footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+
+  /* Create-user section */
+  .create-user-section {
+    background: white; border-radius: 8px; padding: 16px 20px; margin-bottom: 20px;
+    box-shadow: 0 1px 6px rgba(0,0,0,.07);
+  }
+  .create-user-section h3 { font-size: .95rem; color: #1565C0; margin-bottom: 12px; }
+
+  /* Role card extras */
+  .role-section-label {
+    font-size: .8rem; font-weight: 700; color: #888; text-transform: uppercase;
+    letter-spacing: .5px; margin: 12px 0 6px;
+  }
+  .machine-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: #f0f4ff; color: #1565C0; border-radius: 14px;
+    padding: 3px 10px; font-size: .8rem; margin: 2px;
+    border: 1px solid #c5cae9;
+  }
+  .machine-chip button {
+    background: none; border: none; cursor: pointer; color: #e53935;
+    font-size: .9rem; line-height: 1; padding: 0;
+  }
+  .user-mini-table { width: 100%; border-collapse: collapse; font-size: .83rem; }
+  .user-mini-table td { padding: 4px 8px; border-bottom: 1px solid #f0f0f0; }
+  .user-mini-table tr:last-child td { border-bottom: none; }
+</style>
+</head>
+<body>
+
+<!-- Login -->
+<div id="login-page">
+  <div class="login-card">
+    <h1>ROCKY Admin</h1>
+    <p>Đăng nhập để quản lý hệ thống</p>
+    <div class="err" id="login-err" style="display:none"></div>
+    <label>Tên đăng nhập</label>
+    <input id="inp-user" type="text" placeholder="admin" autocomplete="username">
+    <label>Mật khẩu</label>
+    <input id="inp-pass" type="password" placeholder="••••••••" autocomplete="current-password">
+    <button class="btn btn-primary" onclick="doLogin()">Đăng nhập</button>
+  </div>
+</div>
+
+<!-- App shell -->
+<div id="app">
+  <header>
+    <h1>ROCKY Admin</h1>
+    <div style="display:flex;gap:12px;align-items:center">
+      <span id="admin-label" style="font-size:.85rem;opacity:.85">admin</span>
+      <button class="btn btn-outline btn-sm" onclick="doLogout()">Đăng xuất</button>
+    </div>
+  </header>
+
+  <nav>
+    <button class="active" onclick="switchTab('users',this)">Người dùng</button>
+    <button onclick="switchTab('roles',this)">Danh sách role</button>
+    <button onclick="switchTab('machines',this)">Danh sách máy</button>
+  </nav>
+
+  <main>
+    <!-- Tab: Users -->
+    <div class="tab active" id="tab-users">
+      <h2>Danh sách người dùng (Keycloak)</h2>
+
+      <div class="create-user-section">
+        <h3>+ Tạo người dùng mới</h3>
+        <div class="form-row">
+          <input id="nu-username"  placeholder="Username *"    style="width:130px">
+          <input id="nu-firstname" placeholder="Tên"           style="width:110px">
+          <input id="nu-lastname"  placeholder="Họ"            style="width:110px">
+          <input id="nu-email"     placeholder="Email"         style="width:180px">
+          <input id="nu-password"  type="password" placeholder="Mật khẩu *" style="width:130px">
+          <button class="btn btn-primary btn-sm" onclick="createUser()">Tạo</button>
+        </div>
+        <div id="create-user-err" style="color:#c62828;font-size:.83rem;display:none"></div>
+      </div>
+
+      <div id="users-content"><div class="loading">Đang tải...</div></div>
+    </div>
+
+    <!-- Tab: Roles -->
+    <div class="tab" id="tab-roles">
+      <h2>Danh sách role</h2>
+
+      <div class="card" style="margin-bottom:20px">
+        <h3 style="font-size:.95rem;color:#1565C0;margin-bottom:12px">Tạo role mới (Keycloak)</h3>
+        <div class="form-row" style="margin-bottom:8px">
+          <input id="new-role-name" placeholder="Tên role mới..." style="width:200px">
+          <button class="btn btn-primary btn-sm" onclick="createKcRole()">+ Tạo role</button>
+        </div>
+        <div id="roles-list-actions" style="margin-top:8px"></div>
+      </div>
+
+      <div id="roles-content"><div class="loading">Đang tải...</div></div>
+    </div>
+
+    <!-- Tab: Machines -->
+    <div class="tab" id="tab-machines">
+      <h2>Danh sách máy</h2>
+
+      <div class="card" style="margin-bottom:20px">
+        <h3 style="font-size:.95rem;color:#1565C0;margin-bottom:12px">+ Thêm máy mới</h3>
+        <div class="form-row">
+          <input id="nm-alias"       placeholder="Alias *"       style="width:150px">
+          <input id="nm-rustdesk-id" placeholder="RustDesk ID"   style="width:130px">
+          <input id="nm-tag"         placeholder="Tag"           style="width:110px">
+          <input id="nm-note"        placeholder="Ghi chú"       style="width:180px">
+          <button class="btn btn-primary btn-sm" onclick="addMachine()">+ Thêm</button>
+        </div>
+        <div id="add-machine-err" style="color:#c62828;font-size:.83rem;display:none"></div>
+      </div>
+
+      <div id="machines-content"><div class="loading">Đang tải...</div></div>
+    </div>
+  </main>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let kcRoles     = [];   // [{id, name}]
+let allMachines = [];   // [{id, alias, rustdesk_id, tag, note}]
+let roleDetails = [];   // [{name, machine_ids, machines, users}]
+let allUsers    = [];   // [{id, username, firstName, lastName, email, roles}]
+
+// ── Auth ───────────────────────────────────────────────────────────────────
+async function doLogin() {
+  const username = document.getElementById('inp-user').value.trim();
+  const password = document.getElementById('inp-pass').value;
+  const errEl = document.getElementById('login-err');
+  errEl.style.display = 'none';
+  try {
+    const r = await fetch('/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    if (r.ok) {
+      document.getElementById('login-page').style.display = 'none';
+      document.getElementById('app').style.display = 'flex';
+      document.getElementById('admin-label').textContent = username;
+      loadAll();
+    } else {
+      errEl.textContent = 'Sai tên đăng nhập hoặc mật khẩu.';
+      errEl.style.display = 'block';
+    }
+  } catch (e) {
+    errEl.textContent = 'Lỗi kết nối: ' + e.message;
+    errEl.style.display = 'block';
+  }
+}
+
+document.getElementById('inp-pass').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doLogin();
+});
+
+async function doLogout() {
+  await fetch('/admin/logout', { method: 'POST' });
+  location.reload();
+}
+
+// ── Tab switching ──────────────────────────────────────────────────────────
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function fetchKcRoles() {
+  try {
+    const r = await fetch('/admin/api/keycloak-roles');
+    const d = await r.json();
+    kcRoles = Array.isArray(d) ? d : [];
+  } catch (_) { kcRoles = []; }
+}
+
+// ── Load all ───────────────────────────────────────────────────────────────
+async function loadAll() {
+  await fetchKcRoles();
+  await Promise.all([loadUsers(), loadRoles(), loadMachines()]);
+}
+
+// ── Users ──────────────────────────────────────────────────────────────────
+async function createUser() {
+  const username  = document.getElementById('nu-username').value.trim();
+  const firstName = document.getElementById('nu-firstname').value.trim();
+  const lastName  = document.getElementById('nu-lastname').value.trim();
+  const email     = document.getElementById('nu-email').value.trim();
+  const password  = document.getElementById('nu-password').value;
+  const errEl = document.getElementById('create-user-err');
+  errEl.style.display = 'none';
+  if (!username || !password) {
+    errEl.textContent = 'Username và mật khẩu là bắt buộc.';
+    errEl.style.display = 'block';
+    return;
+  }
+  try {
+    const r = await fetch('/admin/api/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, email, firstName, lastName, password }),
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      errEl.textContent = 'Lỗi: ' + (data.error || r.status);
+      errEl.style.display = 'block';
+      return;
+    }
+    ['nu-username','nu-firstname','nu-lastname','nu-email','nu-password']
+      .forEach(id => { document.getElementById(id).value = ''; });
+    await loadUsers();
+  } catch (e) {
+    errEl.textContent = 'Lỗi: ' + e.message;
+    errEl.style.display = 'block';
+  }
+}
+
+async function loadUsers() {
+  const el = document.getElementById('users-content');
+  el.innerHTML = '<div class="loading">Đang tải...</div>';
+  try {
+    const r = await fetch('/admin/api/users');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const users = await r.json();
+    allUsers = Array.isArray(users) ? users : [];
+    if (!users.length) { el.innerHTML = '<div class="empty">Chưa có user nào.</div>'; return; }
+    el.innerHTML = `
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Username</th><th>Tên</th><th>Email</th><th>Roles</th><th>Trạng thái</th><th>Thao tác</th>
+        </tr></thead>
+        <tbody>
+          ${users.map(u => {
+            const fullName = [u.firstName, u.lastName].filter(Boolean).join(' ') || '—';
+            return `
+            <tr id="urow-${u.id}">
+              <td><strong>${esc(u.username || '')}</strong></td>
+              <td>${esc(fullName)}</td>
+              <td>${esc(u.email || '—')}</td>
+              <td>${renderUserRoles(u)}</td>
+              <td>${u.enabled
+                ? '<span class="badge badge-green">Active</span>'
+                : '<span class="badge badge-red">Disabled</span>'}</td>
+              <td style="white-space:nowrap">
+                <button class="btn btn-outline btn-sm"
+                  onclick="openRoleEditor('${u.id}','${esc(u.username)}')">Gán role</button>
+                <button class="btn btn-sm ${u.enabled ? 'btn-danger' : 'btn-primary'}" style="margin-left:4px"
+                  onclick="toggleUser('${u.id}', ${!u.enabled}, this)">${u.enabled ? 'Vô hiệu hoá' : 'Kích hoạt'}</button>
+                <button class="btn btn-danger btn-sm" style="margin-left:4px"
+                  onclick="deleteUser('${u.id}','${esc(u.username)}')">Xoá</button>
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table></div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="empty" style="color:#c62828">Lỗi: ${esc(e.message)}<br>Kiểm tra Keycloak service account đã được cấu hình chưa.</div>`;
+  }
+}
+
+function renderUserRoles(u) {
+  const roles = (u.roles || []).filter(r => !['offline_access','uma_authorization'].includes(r));
+  if (!roles.length) return '<span class="badge badge-gray">—</span>';
+  return roles.map(r => `<span class="badge badge-blue">${esc(r)}</span>`).join('');
+}
+
+async function toggleUser(id, enable, btn) {
+  btn.disabled = true;
+  try {
+    await fetch(`/admin/api/users/${id}/enabled`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: enable }),
+    });
+    await loadUsers();
+  } catch (e) { alert('Lỗi: ' + e.message); btn.disabled = false; }
+}
+
+async function deleteUser(id, username) {
+  if (!confirm(`Xoá user "${username}"? Hành động này không thể hoàn tác.`)) return;
+  try {
+    const r = await fetch(`/admin/api/users/${id}`, { method: 'DELETE' });
+    if (!r.ok) { const d = await r.json(); alert('Lỗi: ' + (d.error || r.status)); return; }
+    await loadUsers();
+  } catch (e) { alert('Lỗi: ' + e.message); }
+}
+
+async function openRoleEditor(userId, username) {
+  const usersRes = await fetch('/admin/api/users');
+  const users = await usersRes.json();
+  const user = users.find(u => u.id === userId) || {};
+  const currentRoles = user.roles || [];
+
+  const roles = (Array.isArray(kcRoles) ? kcRoles : [])
+    .filter(r => !['offline_access','uma_authorization'].includes(r.name));
+
+  const dialog = document.createElement('div');
+  dialog.className = 'modal-overlay';
+  dialog.innerHTML = `
+    <div class="modal-box" style="min-width:320px">
+      <h3>Roles của <em>${esc(username)}</em></h3>
+      <div style="margin-bottom:18px">
+        ${roles.map(role => `
+          <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer">
+            <input type="checkbox" value="${esc(role.name)}"
+              ${currentRoles.includes(role.name) ? 'checked' : ''}
+              style="width:16px;height:16px;accent-color:#1565C0">
+            <span>${esc(role.name)}</span>
+          </label>`).join('')}
+        ${roles.length === 0 ? '<p style="color:#aaa">Chưa có realm role nào.</p>' : ''}
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">Huỷ</button>
+        <button class="btn btn-primary" onclick="saveUserRoles('${userId}', this)">Lưu</button>
+      </div>
+    </div>`;
+  document.body.appendChild(dialog);
+}
+
+async function saveUserRoles(userId, btn) {
+  const dialog = btn.closest('.modal-overlay');
+  const checked   = [...dialog.querySelectorAll('input[type=checkbox]:checked')].map(c => c.value);
+  const unchecked = [...dialog.querySelectorAll('input[type=checkbox]:not(:checked)')].map(c => c.value);
+
+  const usersRes = await fetch('/admin/api/users');
+  const users = await usersRes.json();
+  const user = users.find(u => u.id === userId) || { roles: [] };
+
+  const safeKcRoles = Array.isArray(kcRoles) ? kcRoles : [];
+  const toAdd    = safeKcRoles.filter(r => checked.includes(r.name)   && !user.roles.includes(r.name));
+  const toRemove = safeKcRoles.filter(r => unchecked.includes(r.name) &&  user.roles.includes(r.name));
+
+  btn.disabled = true;
+  try {
+    if (toAdd.length)
+      await fetch(`/admin/api/users/${userId}/roles`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roles: toAdd }),
+      });
+    if (toRemove.length)
+      await fetch(`/admin/api/users/${userId}/roles`, {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roles: toRemove }),
+      });
+    dialog.remove();
+    await loadUsers();
+  } catch (e) { alert('Lỗi: ' + e.message); btn.disabled = false; }
+}
+
+// ── Keycloak role CRUD ─────────────────────────────────────────────────────
+async function createKcRole() {
+  const name = document.getElementById('new-role-name').value.trim();
+  if (!name) return;
+  try {
+    const r = await fetch('/admin/api/keycloak-roles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    const data = await r.json();
+    if (!r.ok) { alert('Lỗi: ' + (data.error || r.status)); return; }
+    document.getElementById('new-role-name').value = '';
+    await fetchKcRoles();
+    await loadRoles();
+  } catch (e) { alert('Lỗi: ' + e.message); }
+}
+
+async function deleteKcRole(name) {
+  if (!confirm(`Xoá role "${name}"? Tất cả user có role này sẽ bị thu hồi quyền.`)) return;
+  try {
+    const r = await fetch(`/admin/api/keycloak-roles/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const data = await r.json();
+    if (!r.ok) { alert('Lỗi: ' + (data.error || r.status)); return; }
+    await fetchKcRoles();
+    await loadRoles();
+    await loadUsers();
+  } catch (e) { alert('Lỗi: ' + e.message); }
+}
+
+function renderRoleDeleteChips() {
+  const el = document.getElementById('roles-list-actions');
+  const roles = (Array.isArray(kcRoles) ? kcRoles : [])
+    .filter(r => !['offline_access','uma_authorization'].includes(r.name));
+  if (!roles.length) { el.innerHTML = ''; return; }
+  el.innerHTML = '<div style="margin-bottom:6px;color:#666;font-size:.82rem">Roles hiện tại:</div>' +
+    roles.map(r => `
+      <span class="tag-chip">
+        ${esc(r.name)}
+        <button onclick="deleteKcRole('${esc(r.name)}')" title="Xoá role" style="color:#c62828">×</button>
+      </span>`).join('');
+}
+
+// ── Roles (card view) ──────────────────────────────────────────────────────
+async function loadRoles() {
+  const el = document.getElementById('roles-content');
+  el.innerHTML = '<div class="loading">Đang tải...</div>';
+  try {
+    const [rolesRes, machinesRes] = await Promise.all([
+      fetch('/admin/api/roles'),
+      fetch('/admin/api/machines'),
+    ]);
+    const rolesData = await rolesRes.json();
+    allMachines = await machinesRes.json();
+    if (!Array.isArray(allMachines)) allMachines = [];
+
+    let warningHtml = '';
+    if (rolesData && rolesData.roles !== undefined) {
+      roleDetails = Array.isArray(rolesData.roles) ? rolesData.roles : [];
+      if (rolesData.kcError) {
+        warningHtml = `<div style="background:#fff3cd;border:1px solid #ffc107;padding:10px 14px;
+          border-radius:6px;margin-bottom:16px;font-size:.87rem;color:#856404">
+          ⚠️ Không thể kết nối Keycloak: ${esc(rolesData.kcError)}<br>
+          Hiển thị role từ dữ liệu local (không có thông tin user).
+        </div>`;
+      }
+    } else if (Array.isArray(rolesData)) {
+      roleDetails = rolesData;
+    } else {
+      roleDetails = [];
+      el.innerHTML = `<div class="empty" style="color:#c62828">Lỗi tải role: ${esc(JSON.stringify(rolesData))}</div>`;
+      return;
+    }
+
+    renderRoleDeleteChips();
+
+    if (!roleDetails.length) {
+      el.innerHTML = warningHtml + '<div class="empty">Chưa có role nào. Tạo role ở trên.</div>';
+      return;
+    }
+    el.innerHTML = warningHtml + roleDetails.map(role => renderRoleCard(role)).join('');
+  } catch (e) {
+    el.innerHTML = `<div class="empty" style="color:#c62828">Lỗi kết nối: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderRoleCard(role) {
+  const users    = role.users    || [];
+  const machines = role.machines || [];
+
+  const usersHtml = users.length
+    ? `<table class="user-mini-table">
+        ${users.map(u => {
+          const name = [u.firstName, u.lastName].filter(Boolean).join(' ');
+          return `<tr>
+            <td><strong>${esc(u.username)}</strong></td>
+            <td>${esc(name || '—')}</td>
+            <td style="color:#888">${esc(u.email || '')}</td>
+            <td style="width:32px">
+              <button class="btn btn-danger btn-sm" style="padding:1px 7px;font-size:.8rem"
+                onclick="removeUserFromRole('${esc(role.name)}','${esc(u.id)}','${esc(u.username)}')"
+                title="Gỡ user khỏi role">×</button>
+            </td>
+          </tr>`;
+        }).join('')}
+      </table>`
+    : '<div style="color:#aaa;font-size:.85rem">Chưa có user nào được gán role này.</div>';
+
+  const machinesHtml = machines.length
+    ? machines.map(m => `
+        <span class="machine-chip">
+          ${esc(m.alias || m.id)}${m.tag ? ` <span style="color:#888;font-size:.75rem">(${esc(m.tag)})</span>` : ''}
+          <button onclick="removeMachineFromRole('${esc(role.name)}','${esc(m.id)}')" title="Gỡ máy khỏi role">×</button>
+        </span>`).join('')
+    : '<span style="color:#aaa;font-size:.85rem">Chưa có máy nào.</span>';
+
+  return `
+    <div class="card">
+      <div class="card-header">
+        <h3>${esc(role.name)}</h3>
+        <button class="btn btn-danger btn-sm" onclick="deleteKcRole('${esc(role.name)}')">Xoá role</button>
+      </div>
+
+      <div class="role-section-label">
+        Người dùng (${users.length})
+        <button class="btn btn-outline btn-sm" style="margin-left:10px;font-size:.78rem"
+          onclick="openAddUserToRole('${esc(role.name)}')">+ Thêm user</button>
+      </div>
+      <div style="margin-bottom:12px">${usersHtml}</div>
+
+      <div class="role-section-label">
+        Máy được truy cập (${machines.length})
+        <button class="btn btn-outline btn-sm" style="margin-left:10px;font-size:.78rem"
+          onclick="openAddMachineToRole('${esc(role.name)}')">+ Thêm máy</button>
+      </div>
+      <div>${machinesHtml}</div>
+    </div>`;
+}
+
+async function openAddMachineToRole(roleName) {
+  const role = roleDetails.find(r => r.name === roleName);
+  if (!role) return;
+  const currentIds = new Set(role.machine_ids || []);
+  const available = allMachines.filter(m => !currentIds.has(m.id));
+
+  if (!available.length) { alert('Tất cả máy đã được thêm vào role này.'); return; }
+
+  const dialog = document.createElement('div');
+  dialog.className = 'modal-overlay';
+  dialog.innerHTML = `
+    <div class="modal-box" style="min-width:360px">
+      <h3>Thêm máy vào role <em>${esc(roleName)}</em></h3>
+      <div style="max-height:260px;overflow-y:auto;margin-bottom:4px">
+        ${available.map(m => `
+          <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer">
+            <input type="checkbox" value="${esc(m.id)}" style="width:16px;height:16px;accent-color:#1565C0">
+            <span>${esc(m.alias || m.id)}</span>
+            ${m.tag ? `<span class="badge badge-gray">${esc(m.tag)}</span>` : ''}
+            ${m.rustdesk_id ? `<code style="font-size:.75rem;color:#888">${esc(m.rustdesk_id)}</code>` : ''}
+          </label>`).join('')}
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">Huỷ</button>
+        <button class="btn btn-primary" onclick="saveAddMachineToRole('${esc(roleName)}',this)">Thêm</button>
+      </div>
+    </div>`;
+  document.body.appendChild(dialog);
+}
+
+async function saveAddMachineToRole(roleName, btn) {
+  const dialog = btn.closest('.modal-overlay');
+  const selected = [...dialog.querySelectorAll('input[type=checkbox]:checked')].map(c => c.value);
+  if (!selected.length) { dialog.remove(); return; }
+
+  const role = roleDetails.find(r => r.name === roleName);
+  if (!role) return;
+  const newIds = [...new Set([...(role.machine_ids || []), ...selected])];
+
+  btn.disabled = true;
+  try {
+    await putRoleMachines(roleName, newIds);
+    dialog.remove();
+    await loadRoles();
+  } catch (e) { alert('Lỗi: ' + e.message); btn.disabled = false; }
+}
+
+async function removeMachineFromRole(roleName, machineId) {
+  const role = roleDetails.find(r => r.name === roleName);
+  if (!role) return;
+  const newIds = (role.machine_ids || []).filter(id => id !== machineId);
+  try {
+    await putRoleMachines(roleName, newIds);
+    await loadRoles();
+  } catch (e) { alert('Lỗi: ' + e.message); }
+}
+
+async function putRoleMachines(roleName, machineIds) {
+  // Build full mapping from current roleDetails, updating the target role
+  const mapping = {};
+  for (const r of roleDetails) {
+    mapping[r.name] = r.name === roleName ? machineIds : (r.machine_ids || []);
+  }
+  const res = await fetch('/admin/api/roles', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(mapping),
+  });
+  if (!res.ok) {
+    const d = await res.json();
+    throw new Error(d.error || res.status);
+  }
+}
+
+// ── Role ↔ User management ────────────────────────────────────────────────
+async function removeUserFromRole(roleName, userId, username) {
+  if (!confirm(`Gỡ user "${username}" khỏi role "${roleName}"?`)) return;
+  const roleObj = kcRoles.find(r => r.name === roleName);
+  if (!roleObj) { alert('Không tìm thấy role trong danh sách.'); return; }
+  try {
+    const r = await fetch(`/admin/api/users/${userId}/roles`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roles: [roleObj] }),
+    });
+    if (!r.ok) { const d = await r.json(); alert('Lỗi: ' + (d.error || r.status)); return; }
+    await Promise.all([loadRoles(), loadUsers()]);
+  } catch (e) { alert('Lỗi: ' + e.message); }
+}
+
+async function openAddUserToRole(roleName) {
+  const role = roleDetails.find(r => r.name === roleName);
+  if (!role) return;
+  const existingIds = new Set((role.users || []).map(u => u.id));
+
+  let users = allUsers;
+  if (!users.length) {
+    const r = await fetch('/admin/api/users');
+    users = await r.json();
+    allUsers = Array.isArray(users) ? users : [];
+  }
+  const available = users.filter(u => !existingIds.has(u.id));
+  if (!available.length) { alert('Tất cả user đã thuộc role này.'); return; }
+
+  const dialog = document.createElement('div');
+  dialog.className = 'modal-overlay';
+  dialog.innerHTML = `
+    <div class="modal-box" style="min-width:400px">
+      <h3>Thêm user vào role <em>${esc(roleName)}</em></h3>
+      <div style="max-height:300px;overflow-y:auto;padding:4px 0">
+        ${available.map(u => {
+          const name = [u.firstName, u.lastName].filter(Boolean).join(' ');
+          return `<label style="display:flex;align-items:center;gap:10px;margin-bottom:10px;cursor:pointer">
+            <input type="checkbox" value="${esc(u.id)}" style="width:16px;height:16px;accent-color:#1565C0;flex-shrink:0">
+            <span>
+              <strong>${esc(u.username)}</strong>
+              ${name ? `<span style="color:#555"> — ${esc(name)}</span>` : ''}
+              <br><span style="color:#999;font-size:.78rem">${esc(u.email || '')}</span>
+            </span>
+          </label>`;
+        }).join('')}
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">Huỷ</button>
+        <button class="btn btn-primary" onclick="saveAddUserToRole('${esc(roleName)}',this)">Thêm</button>
+      </div>
+    </div>`;
+  document.body.appendChild(dialog);
+}
+
+async function saveAddUserToRole(roleName, btn) {
+  const dialog = btn.closest('.modal-overlay');
+  const selected = [...dialog.querySelectorAll('input[type=checkbox]:checked')].map(c => c.value);
+  if (!selected.length) { dialog.remove(); return; }
+  const roleObj = kcRoles.find(r => r.name === roleName);
+  if (!roleObj) { alert('Không tìm thấy role.'); return; }
+  btn.disabled = true;
+  try {
+    await Promise.all(selected.map(userId =>
+      fetch(`/admin/api/users/${userId}/roles`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roles: [roleObj] }),
+      })
+    ));
+    dialog.remove();
+    await Promise.all([loadRoles(), loadUsers()]);
+  } catch (e) { alert('Lỗi: ' + e.message); btn.disabled = false; }
+}
+
+// ── Machines ───────────────────────────────────────────────────────────────
+async function loadMachines() {
+  const el = document.getElementById('machines-content');
+  el.innerHTML = '<div class="loading">Đang tải...</div>';
+  try {
+    const r = await fetch('/admin/api/machines');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    allMachines = await r.json();
+    if (!Array.isArray(allMachines)) allMachines = [];
+    if (!allMachines.length) {
+      el.innerHTML = '<div class="empty">Chưa có máy nào. Thêm máy ở trên.</div>';
+      return;
+    }
+    el.innerHTML = `
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Alias</th><th>RustDesk ID</th><th>Tag</th><th>Ghi chú</th><th>Roles</th><th>Thao tác</th>
+        </tr></thead>
+        <tbody>
+          ${allMachines.map(m => `
+            <tr>
+              <td><strong>${esc(m.alias || '—')}</strong></td>
+              <td><code>${esc(m.rustdesk_id || '—')}</code></td>
+              <td>${m.tag ? `<span class="badge badge-blue">${esc(m.tag)}</span>` : '—'}</td>
+              <td style="color:#666">${esc(m.note || '—')}</td>
+              <td>${(m.roles || []).map(r => `<span class="badge badge-blue">${esc(r)}</span>`).join('') || '<span style="color:#aaa">—</span>'}</td>
+              <td style="white-space:nowrap">
+                <button class="btn btn-outline btn-sm"
+                  onclick="openEditMachine('${esc(m.id)}')">Sửa</button>
+                <button class="btn btn-danger btn-sm" style="margin-left:4px"
+                  onclick="deleteMachine('${esc(m.id)}','${esc(m.alias || m.id)}')">Xoá</button>
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table></div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="empty" style="color:#c62828">Lỗi: ${esc(e.message)}</div>`;
+  }
+}
+
+async function addMachine() {
+  const alias      = document.getElementById('nm-alias').value.trim();
+  const rustdesk_id = document.getElementById('nm-rustdesk-id').value.trim();
+  const tag        = document.getElementById('nm-tag').value.trim();
+  const note       = document.getElementById('nm-note').value.trim();
+  const errEl = document.getElementById('add-machine-err');
+  errEl.style.display = 'none';
+  if (!alias) {
+    errEl.textContent = 'Alias là bắt buộc.';
+    errEl.style.display = 'block';
+    return;
+  }
+  try {
+    const r = await fetch('/admin/api/machines', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ alias, rustdesk_id, tag, note }),
+    });
+    const data = await r.json();
+    if (!r.ok) { errEl.textContent = 'Lỗi: ' + (data.error || r.status); errEl.style.display = 'block'; return; }
+    ['nm-alias','nm-rustdesk-id','nm-tag','nm-note'].forEach(id => { document.getElementById(id).value = ''; });
+    await loadMachines();
+  } catch (e) { errEl.textContent = 'Lỗi: ' + e.message; errEl.style.display = 'block'; }
+}
+
+function openEditMachine(machineId) {
+  const m = allMachines.find(x => x.id === machineId);
+  if (!m) return;
+  const currentRoles = m.roles || [];
+  const roleCheckboxes = (Array.isArray(kcRoles) ? kcRoles : [])
+    .filter(r => !['offline_access','uma_authorization'].includes(r.name));
+  const rolesHtml = roleCheckboxes.length
+    ? roleCheckboxes.map(r => `
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer">
+          <input type="checkbox" class="em-role-cb" value="${esc(r.name)}"
+            ${currentRoles.includes(r.name) ? 'checked' : ''}
+            style="width:16px;height:16px;accent-color:#1565C0">
+          <span>${esc(r.name)}</span>
+        </label>`).join('')
+    : '<span style="color:#aaa;font-size:.85rem">Chưa load được roles từ Keycloak.</span>';
+
+  const dialog = document.createElement('div');
+  dialog.className = 'modal-overlay';
+  dialog.innerHTML = `
+    <div class="modal-box">
+      <h3>Sửa máy</h3>
+      <label>Alias *</label>
+      <input id="em-alias"       value="${esc(m.alias       || '')}" placeholder="Alias">
+      <label>RustDesk ID</label>
+      <input id="em-rustdesk-id" value="${esc(m.rustdesk_id || '')}" placeholder="RustDesk ID">
+      <label>Tag</label>
+      <input id="em-tag"         value="${esc(m.tag         || '')}" placeholder="Tag">
+      <label>Ghi chú</label>
+      <input id="em-note"        value="${esc(m.note        || '')}" placeholder="Ghi chú">
+      <label>Roles được phép truy cập</label>
+      <div style="max-height:140px;overflow-y:auto;padding:8px;border:1px solid #e0e0e0;border-radius:6px;margin-top:4px">
+        ${rolesHtml}
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">Huỷ</button>
+        <button class="btn btn-primary" onclick="saveEditMachine('${esc(m.id)}',this)">Lưu</button>
+      </div>
+    </div>`;
+  document.body.appendChild(dialog);
+}
+
+async function saveEditMachine(machineId, btn) {
+  const dialog = btn.closest('.modal-overlay');
+  const alias       = dialog.querySelector('#em-alias').value.trim();
+  const rustdesk_id = dialog.querySelector('#em-rustdesk-id').value.trim();
+  const tag         = dialog.querySelector('#em-tag').value.trim();
+  const note        = dialog.querySelector('#em-note').value.trim();
+  const roles       = [...dialog.querySelectorAll('input.em-role-cb:checked')].map(c => c.value);
+  if (!alias) { alert('Alias là bắt buộc.'); return; }
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/admin/api/machines/${encodeURIComponent(machineId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ alias, rustdesk_id, tag, note, roles }),
+    });
+    if (!r.ok) { const d = await r.json(); alert('Lỗi: ' + (d.error || r.status)); btn.disabled = false; return; }
+    dialog.remove();
+    await Promise.all([loadMachines(), loadRoles()]);
+  } catch (e) { alert('Lỗi: ' + e.message); btn.disabled = false; }
+}
+
+async function deleteMachine(machineId, label) {
+  if (!confirm(`Xoá máy "${label}"? Máy cũng sẽ bị xoá khỏi tất cả roles.`)) return;
+  try {
+    const r = await fetch(`/admin/api/machines/${encodeURIComponent(machineId)}`, { method: 'DELETE' });
+    if (!r.ok) { const d = await r.json(); alert('Lỗi: ' + (d.error || r.status)); return; }
+    await Promise.all([loadMachines(), loadRoles()]);
+  } catch (e) { alert('Lỗi: ' + e.message); }
+}
+</script>
+</body>
+</html>

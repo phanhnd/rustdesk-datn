@@ -117,7 +117,7 @@ class MsgboxComponent: Reactor.Component {
 
     function getColor() {
         if (this.type == "input-password" || this.type == "input-2fa" || this.type == "custom-os-password" || this.type == "session-login" || this.type == "session-login-password") {
-            return "#AD448E";
+            return "#e91e63";
         }
         if (this.type == "success") {
             return "#32bea6";
@@ -125,7 +125,7 @@ class MsgboxComponent: Reactor.Component {
         if (this.type.indexOf("error") >= 0 || this.type == "re-input-password" || this.type == "session-re-login" || this.type == "session-login-re-password") {
             return "#e04f5f";
         }
-        return "#2C8CFF";
+        return "#f06292";
     }
 
     function hasSkip() {
@@ -267,13 +267,13 @@ class MsgboxComponent: Reactor.Component {
         const filter = "Png file (*.png)";
         const defaultExt = "png";
         const initialPath = System.path(#USER_DOCUMENTS, "screenshot");
-        const caption = "Save as";
+        const caption = "Lưu thành";
         var url = view.selectFile(#save, filter, defaultExt, initialPath, caption);
         handler.enter(handler.get_keyboard_mode());
         if(url) {
             var res = handler.handle_screenshot("0:" + URL.toPath(url));
             if (res) {
-                msgbox("custom-error-nocancel-nook-hasclose", "Take screenshot", res, "", function() {});
+                msgbox("custom-error-nocancel-nook-hasclose", translate("Take screenshot"), res, "", function() {});
             }
         } else {
             handler.handle_screenshot("2");

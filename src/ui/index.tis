@@ -105,7 +105,7 @@ function createNewConnect(id, type) {
     id = handler.handle_relay_id(id);
     var force_relay = old_id != id; 
     if (id == my_id) {
-        msgbox("custom-error", "Error", "You cannot connect to your own computer");
+        msgbox("custom-error", "Lỗi", "Bạn không thể kết nối đến máy tính của chính bạn");
         return;
     }
     handler.set_remote_id(id);
@@ -603,7 +603,7 @@ class MyIdMenu: Reactor.Component {
             <div>Fingerprint: " + handler.get_fingerprint() + " \
             <div .link .custom-event url='https://rustdesk.com/privacy.html'>" + translate("Privacy Statement") + "</div> \
             <div .link .custom-event url='https://rustdesk.com'>" + translate("Website") + "</div> \
-	    <div style='background: #2c8cff; color: white; padding: 1em; margin-top: 1em;'>Copyright &copy; 2025 Purslane Ltd.\
+	    <div style='background: #f06292; color: white; padding: 1em; margin-top: 1em;'>Copyright &copy; 2025 Purslane Ltd.\
             <br />" + handler.get_license() + " \
             <p style='font-weight: bold'>" + translate("Slogan_tip") + "</p>\
             </div>\
@@ -767,6 +767,8 @@ class App: Reactor.Component
     function newRemote(type) {
         createNewConnect(this.remote_id.value, type);
     }
+
+
 }
 
 class InstallMe: Reactor.Component {
@@ -847,13 +849,13 @@ class UpdateMe: Reactor.Component {
             handler.update_me(path);
         };
         var onerror = function(err) {
-            msgbox("custom-error", "Download Error", "Failed to download"); 
+            msgbox("custom-error", "Lỗi tải xuống", "Tải xuống thất bại");
         };
         var onprogress = function(loaded, total) {
             if (!total) total = 5 * 1024 * 1024;
             var el = $(#download-percent);
             el.style.set{display: "block"};
-            el.content("Downloading %" + (loaded * 100 / total));
+            el.content("Đang tải %" + (loaded * 100 / total));
         };
         stdout.println("Downloading " + url + " to " + path);
         download(
