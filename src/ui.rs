@@ -494,6 +494,39 @@ impl UI {
         new_remote(id, remote_type, force_relay)
     }
 
+    fn check_access_blocking(&mut self, rustdesk_id: String) -> String {
+        use hbb_common::config::LocalConfig;
+        let token = LocalConfig::get_option("access_token");
+        let client = match reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_millis(800))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return "".to_owned(), // failopen
+        };
+        let mut builder = client
+            .post("http://127.0.0.1:3000/api/check-access")
+            .json(&serde_json::json!({ "rustdesk_id": rustdesk_id }));
+        if !token.is_empty() {
+            builder = builder.header("Authorization", format!("Bearer {}", token));
+        }
+        match builder.send() {
+            Ok(resp) => match resp.json::<serde_json::Value>() {
+                Ok(v) => {
+                    if v["allowed"].as_bool().unwrap_or(true) {
+                        return "".to_owned();
+                    }
+                    match v["reason"].as_str().unwrap_or("no_permission") {
+                        "login_required" => "Bạn cần đăng nhập để kết nối máy này".to_owned(),
+                        _ => "Bạn không có quyền truy cập máy này".to_owned(),
+                    }
+                }
+                Err(_) => "".to_owned(), // failopen
+            },
+            Err(_) => "".to_owned(), // server offline → failopen
+        }
+    }
+
     fn is_process_trusted(&mut self, _prompt: bool) -> bool {
         is_process_trusted(_prompt)
     }
@@ -743,6 +776,7 @@ impl sciter::EventHandler for UI {
         fn closing(i32, i32, i32, i32);
         fn get_size();
         fn new_remote(String, String, bool);
+        fn check_access_blocking(String);
         fn send_wol(String);
         fn remove_peer(String);
         fn remove_discovered(String);

@@ -103,9 +103,14 @@ function createNewConnect(id, type) {
     if (!id) return;
     var old_id = id;
     id = handler.handle_relay_id(id);
-    var force_relay = old_id != id; 
+    var force_relay = old_id != id;
     if (id == my_id) {
         msgbox("custom-error", "Lỗi", "Bạn không thể kết nối đến máy tính của chính bạn");
+        return;
+    }
+    var err = handler.check_access_blocking(id);
+    if (err) {
+        msgbox("custom-error", "Không có quyền truy cập", err);
         return;
     }
     handler.set_remote_id(id);

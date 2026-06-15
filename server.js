@@ -684,6 +684,40 @@ http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === 'POST' && p === '/api/check-access') {
+    const authHeader = req.headers['authorization'] || '';
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+    const rustdesk_id = (body || {}).rustdesk_id;
+    if (!rustdesk_id) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'missing rustdesk_id' }));
+      return;
+    }
+    const appData = loadData();
+    const machine = appData.machines.find(m => m.rustdesk_id === rustdesk_id);
+    // Máy không thuộc hệ thống → không chặn
+    if (!machine) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ allowed: true }));
+      return;
+    }
+    // Máy thuộc hệ thống → bắt buộc phải login
+    const payload = token ? decodeJwtPayload(token) : null;
+    if (!payload) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ allowed: false, reason: 'login_required' }));
+      return;
+    }
+    // Đã login → kiểm tra role
+    const userRoles = getRolesFromPayload(payload);
+    const allowedIds = getMachinesForRoles(userRoles).map(m => m.id);
+    const allowed = allowedIds.includes(machine.id);
+    console.log(`[check-access] rustdesk_id=${rustdesk_id} roles=${userRoles} allowed=${allowed}`);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ allowed, reason: allowed ? null : 'no_permission' }));
+    return;
+  }
+
   if (req.method === 'POST' && p === '/api/address-books') {
     const authHeader = req.headers['authorization'] || '';
     const token = authHeader.replace(/^Bearer\s+/i, '');
