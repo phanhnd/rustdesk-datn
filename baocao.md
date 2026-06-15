@@ -1,7 +1,7 @@
 # Báo cáo tổng hợp dự án ROCKY
 
 > Tổng hợp từ tất cả file `.md` trong project root + `.claude/`
-> Ngày tổng hợp: 2026-06-09
+> Ngày tổng hợp: 2026-06-15
 
 ---
 
@@ -589,11 +589,23 @@ node server.js
 
 ## Việc còn lại
 
-- [ ] Verify tab Roles trên browser: role cards, thêm/gỡ user và machine
-- [ ] Verify tab Máy: cột Roles, modal Sửa có chọn Roles
-- [ ] Test `POST /api/address-books` với JWT thật từ RustDesk client
-- [ ] Grant `manage-clients` cho service account
-- [ ] Verify ab.tis login flow end-to-end
+### API đã test pass
+- ✅ `GET /admin/api/keycloak-roles` → trả đúng client roles (admin, viewer, guest)
+- ✅ `GET /admin/api/roles` → enriched với users + machines
+- ✅ `GET /admin/api/machines` → kèm trường `roles`
+- ✅ `GET /admin/api/users` → kèm client roles
+- ✅ `POST/DELETE /admin/api/users/:id/roles` → thêm/gỡ user khỏi role
+
+### Chưa verify trên browser
+- [ ] Tab Roles: role cards hiện đúng users + machines
+- [ ] Tab Roles: thêm/gỡ user và machine từ role card
+- [ ] Tab Máy: cột Roles hiện badges đúng, modal Sửa có chọn Roles
+
+### Việc chưa làm
+- [ ] Test `POST /api/address-books` với JWT thật từ RustDesk client (ab.tis)
+- [ ] Grant `manage-clients` cho service account nếu muốn tạo/xoá KC client role từ UI
+- [ ] Verify ab.tis login flow hoàn chỉnh end-to-end
+- [ ] (Optional) Cấu hình Google Social Login — xem `.claude/plans/keycloak-google-login.md`
 
 ---
 
@@ -861,4 +873,4 @@ Hoàn thiện đầy đủ Admin UI end-to-end: CRUD users, roles, machines; dat
 
 ---
 
-*Tổng hợp từ: `README.md`, `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.claude/DATN.md`, `.claude/SUMMARY.md`, `.claude/plans/rebrand-rocky-blue-theme.md`, `.claude/plans/change-lang-color.md`, `.claude/plans/keycloak-login-address-book.md`, `.claude/plans/lap-plan-hoan-thien-tidy-starfish.md`*
+*Tổng hợp từ: `README.md`, `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.claude/DATN.md`, `.claude/SUMMARY.md`, `know1006.md`, `.claude/plans/rebrand-rocky-blue-theme.md`, `.claude/plans/change-lang-color.md`, `.claude/plans/keycloak-login-address-book.md`, `.claude/plans/lap-plan-hoan-thien-tidy-starfish.md`, `.claude/plans/keycloak-google-login.md`*

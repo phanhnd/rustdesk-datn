@@ -171,9 +171,9 @@ Giữ nguyên tiếng Anh: `"Socks5/Http(s) Proxy"`, `"% Bitrate"`, `"OS Passwor
 │   ├── lang.rs                    ← Fallback language = "vi"
 │   └── ui/
 │       ├── ab.tis                 ← Address Book + Keycloak login flow
+│       ├── index.tis              ← Copyright bg
 │       ├── common.css             ← Blue theme CSS variables
 │       ├── index.css              ← Gradient banner
-│       ├── index.tis              ← Copyright bg
 │       ├── header.tis / file_transfer.tis  ← SVG fills
 │       └── msgbox.tis             ← Dialog colors
 ├── libs/hbb_common/src/config.rs  ← APP_NAME = "ROCKY"
@@ -182,6 +182,7 @@ Giữ nguyên tiếng Anh: `"Socks5/Http(s) Proxy"`, `"% Bitrate"`, `"OS Passwor
 ├── data.json                      ← Persistence (machines + role mappings)
 └── .claude/
     ├── SUMMARY.md                 ← File này
+    ├── DATN.md                    ← Tài liệu kỹ thuật đầy đủ
     └── plans/
         ├── rebrand-rocky-blue-theme.md
         ├── change-lang-color.md
