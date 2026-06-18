@@ -55,7 +55,8 @@ Pipeline: `dtolnay/rust-toolchain` pinned to **Rust 1.75.0** → LLVM/Clang 15.0
 (`120deac3...844ba10b`) → `vcpkg install --triplet x64-windows-static --x-install-root=...`
 (manifest mode, reads `vcpkg.json`) → `python build.py --portable`.
 
-Caveats discovered while fixing this job (see git history of `build.yml`):
+Caveats discovered while fixing this job — full change log with root causes in
+[`docs/ci-windows-build.md`](docs/ci-windows-build.md):
 - **Rust must stay pinned ≤1.77.** Rust 1.78+ changed i128 ABI layout, which breaks the pinned
   `sciter-rs` crate. Do not bump this toolchain to `stable`/`latest`.
 - **vcpkg triplet must be `x64-windows-static`** (no `-md` suffix) — `libs/scrap/build.rs:50`
@@ -66,6 +67,17 @@ Caveats discovered while fixing this job (see git history of `build.yml`):
   not anything under `target/release/`.
 - `actions/upload-artifact` must be `@v4` or newer; `v1`-`v3` are sunset by GitHub and fail
   outright.
+- `res/inline-sciter.py` must open all `src/ui/*` files with explicit `encoding='utf-8'` — on
+  Windows runners the default codepage (`cp1252`) cannot decode UTF-8 (e.g. Vietnamese text),
+  causing a `UnicodeDecodeError`.
+- `build.py:external_resources()` must always create the `resources/` directory, even when no
+  `--feature` (external resource download) flag is passed — otherwise the next `cp` step turns
+  `resources` into a plain file instead of a directory.
+- `libs/portable` is a **Cargo workspace member**, so its packer crate
+  (`rustdesk-portable-packer`) always builds into the **workspace-root** `target/release/`, never
+  into `resources/`. The final installer rename/move must read from there, and `generate.py`'s
+  `-e` flag must point at the real `RustDesk.exe` inside `resources/`, not the desired output
+  filename.
 
 `build-linux` job in the same file is a separate, currently-unverified job — not covered by the
 above.
@@ -235,9 +247,14 @@ Giao diện web quản trị chạy song song trên cùng port với gateway Key
 ### Chạy
 ```bash
 node server.js
-# Admin UI: http://127.0.0.1:3000/admin
+# Admin UI: http://192.168.1.16:3000/admin
 # Credentials: admin / admin123
 ```
+
+> Gateway bind `0.0.0.0:3000` (không phải `127.0.0.1`) để client build từ CI/CD trên máy khác kết nối được
+> tới VM. Mọi URL gọi gateway/Keycloak ở phía client (`src/ui.rs`, `src/ui/ab.tis`) và `REDIRECT_URI`/
+> `KEYCLOAK_URL` trong `server.js` đang hardcode địa chỉ VM `192.168.1.16` — đổi địa chỉ VM thì phải sửa
+> đồng bộ ở cả 2 phía (xem `docs/admin-ui.md` Change Log).
 
 ### Kiến trúc
 - **`server.js`** — Node.js gateway, dùng built-ins (`http`, `fs`, `crypto`, `node:sqlite`), không có npm dependencies

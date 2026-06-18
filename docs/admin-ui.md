@@ -70,6 +70,19 @@ SQLite (machines ⨝ machine_roles)
 
 ## Change Log
 
+- **2026-06-18** — Sửa lỗi client build từ CI/CD (.exe) không kết nối được tới Keycloak/gateway chạy
+  trên máy ảo riêng. Hai nguyên nhân:
+  1. `server.js` gọi `.listen(3000, '127.0.0.1', ...)` — chỉ chấp nhận kết nối từ chính máy đang chạy
+     gateway, từ chối mọi kết nối từ máy khác trong mạng (dù client trỏ đúng IP vẫn bị reset/timeout).
+     → đổi thành `.listen(3000, '0.0.0.0', ...)`.
+  2. Toàn bộ URL gọi gateway hardcode `127.0.0.1:3000`/`localhost:8080`, chỉ đúng khi client và gateway
+     chạy chung máy. Khi `.exe` build từ CI chạy trên máy Windows khác với VM chứa Keycloak + server.js,
+     `127.0.0.1` trên máy Windows không trỏ tới VM. → đổi toàn bộ sang địa chỉ mạng thật của VM
+     (`192.168.1.16`) tại: `server.js` (`KEYCLOAK_URL`, `REDIRECT_URI`), `src/ui.rs:508`
+     (`check_access_blocking`), `src/ui/ab.tis` (`loginWithKeycloak`, `pollKeycloakAuth`,
+     `getAddressBooks`, `logoutFromKeycloak`).
+  Nếu đổi địa chỉ VM sau này, phải sửa đồng bộ cả 6 vị trí trên — chưa tham số hóa qua file config.
+
 - **2026-06-17** — Thay `data.json` (JSON phẳng) bằng SQLite (`data/rocky.db`, qua `node:sqlite`) làm persistence chính cho `machines` + `machine_roles`. Giữ `data.json` làm migrate-source một lần, không xóa.
 - **2026-06-17** — Bỏ hoàn toàn trường `tag` khỏi mô hình máy trạm: schema DB, `GET/POST/PUT /admin/api/machines`, `GET /admin/api/roles`, và toàn bộ UI quản lý máy/role trong `public/admin.html`.
 - **2026-06-17** — `src/ui/ab.tis` (`getAddressBooks()`): panel filter "Tags" bên trái Address Book nay dựng từ `machine.roles` (trả về từ `/api/address-books`) thay cho `machine.tag` đã bị xóa. Hành vi filter/chọn tag trong UI không đổi, chỉ đổi nguồn dữ liệu.

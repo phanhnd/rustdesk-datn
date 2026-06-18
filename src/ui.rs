@@ -505,7 +505,7 @@ impl UI {
             Err(_) => return "".to_owned(), // failopen
         };
         let mut builder = client
-            .post("http://127.0.0.1:3000/api/check-access")
+            .post("http://192.168.1.16:3000/api/check-access")
             .json(&serde_json::json!({ "rustdesk_id": rustdesk_id }));
         if !token.is_empty() {
             builder = builder.header("Authorization", format!("Bearer {}", token));

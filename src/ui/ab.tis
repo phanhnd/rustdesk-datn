@@ -702,7 +702,7 @@ function loginWithKeycloak() {
     abError = "";
     abWaitingBrowser = false;
     app.update();
-    httpRequest("http://127.0.0.1:3000/api/auth/init", #post, {}, function(data) {
+    httpRequest("http://192.168.1.16:3000/api/auth/init", #post, {}, function(data) {
         if (!data || !data.url) {
             abError = "Không thể kết nối tới cổng xác thực";
             abLoading = false;
@@ -731,7 +731,7 @@ function pollKeycloakAuth(sessionCode, tries) {
     }
     self.timer(2s, function() {
         if (!abWaitingBrowser) return;
-        httpRequest("http://127.0.0.1:3000/api/auth/status", #post,
+        httpRequest("http://192.168.1.16:3000/api/auth/status", #post,
             { session_code: sessionCode },
             function(data) {
                 if (data && data.access_token) {
@@ -754,7 +754,7 @@ function getAddressBooks() {
     abError = "";
     app.update();
     var token = handler.get_local_option("access_token");
-    httpRequest("http://127.0.0.1:3000/api/address-books", #post, {},
+    httpRequest("http://192.168.1.16:3000/api/address-books", #post, {},
         function(data) {
             ab.peers = [];
             ab.tags = [];
@@ -795,7 +795,7 @@ function logoutFromKeycloak() {
     ab = { tags: [], peers: [] };
     app.update();
     if (token) {
-        httpRequest("http://127.0.0.1:3000/api/auth/logout", #post, {},
+        httpRequest("http://192.168.1.16:3000/api/auth/logout", #post, {},
             function(_) {},
             function(_,__) {},
             "Authorization: Bearer " + token

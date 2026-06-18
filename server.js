@@ -6,11 +6,11 @@ const crypto = require('crypto');
 const querystring = require('querystring');
 const { DatabaseSync } = require('node:sqlite');
 
-const KEYCLOAK_URL  = 'http://localhost:8080';
+const KEYCLOAK_URL  = 'http://192.168.1.16:8080';
 const REALM         = 'rustdesk';
 const CLIENT_ID     = 'rustdesk-client';
 const CLIENT_SECRET = 'wzZwDnLFW02kkOS3gyCdKWNErENBaEEN';
-const REDIRECT_URI  = 'http://127.0.0.1:3000/api/auth/callback';
+const REDIRECT_URI  = 'http://192.168.1.16:3000/api/auth/callback';
 
 // Admin credentials
 const ADMIN_USER = 'admin';
@@ -766,7 +766,7 @@ http.createServer(async (req, res) => {
   }
 
   res.writeHead(404); res.end('Not found');
-}).listen(3000, '127.0.0.1', () => {
-  console.log('Gateway running at http://127.0.0.1:3000');
-  console.log('Admin UI:         http://127.0.0.1:3000/admin');
+}).listen(3000, '0.0.0.0', () => {
+  console.log('Gateway running at http://192.168.1.16:3000');
+  console.log('Admin UI:         http://192.168.1.16:3000/admin');
 });
