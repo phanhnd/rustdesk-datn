@@ -250,16 +250,17 @@ def download_extract_features(features, res_dir):
 
 
 def external_resources(flutter, args, res_dir):
-    features = parse_rc_features(args.feature)
-    if not features:
-        return
-
-    print(f'Build with features {list(features.keys())}')
     if os.path.isdir(res_dir) and not os.path.islink(res_dir):
         shutil.rmtree(res_dir)
     elif os.path.exists(res_dir):
         raise Exception(f'Find file {res_dir}, not a directory')
     os.makedirs(res_dir, exist_ok=True)
+
+    features = parse_rc_features(args.feature)
+    if not features:
+        return
+
+    print(f'Build with features {list(features.keys())}')
     download_extract_features(features, res_dir)
     if flutter:
         os.makedirs(flutter_build_dir_2, exist_ok=True)
