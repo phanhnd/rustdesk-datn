@@ -230,7 +230,6 @@
         <div class="form-row">
           <input id="nm-alias"       placeholder="Alias *"       style="width:150px">
           <input id="nm-rustdesk-id" placeholder="RustDesk ID"   style="width:130px">
-          <input id="nm-tag"         placeholder="Tag"           style="width:110px">
           <input id="nm-note"        placeholder="Ghi chú"       style="width:180px">
           <button class="btn btn-primary btn-sm" onclick="addMachine()">+ Thêm</button>
         </div>
@@ -245,7 +244,7 @@
 <script>
 // ── State ──────────────────────────────────────────────────────────────────
 let kcRoles     = [];   // [{id, name}]
-let allMachines = [];   // [{id, alias, rustdesk_id, tag, note}]
+let allMachines = [];   // [{id, alias, rustdesk_id, note}]
 let roleDetails = [];   // [{name, machine_ids, machines, users}]
 let allUsers    = [];   // [{id, username, firstName, lastName, email, roles}]
 
@@ -591,7 +590,7 @@ function renderRoleCard(role) {
   const machinesHtml = machines.length
     ? machines.map(m => `
         <span class="machine-chip">
-          ${esc(m.alias || m.id)}${m.tag ? ` <span style="color:#888;font-size:.75rem">(${esc(m.tag)})</span>` : ''}
+          ${esc(m.alias || m.id)}
           <button onclick="removeMachineFromRole('${esc(role.name)}','${esc(m.id)}')" title="Gỡ máy khỏi role">×</button>
         </span>`).join('')
     : '<span style="color:#aaa;font-size:.85rem">Chưa có máy nào.</span>';
@@ -637,7 +636,6 @@ async function openAddMachineToRole(roleName) {
           <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer">
             <input type="checkbox" value="${esc(m.id)}" style="width:16px;height:16px;accent-color:#1565C0">
             <span>${esc(m.alias || m.id)}</span>
-            ${m.tag ? `<span class="badge badge-gray">${esc(m.tag)}</span>` : ''}
             ${m.rustdesk_id ? `<code style="font-size:.75rem;color:#888">${esc(m.rustdesk_id)}</code>` : ''}
           </label>`).join('')}
       </div>
@@ -786,14 +784,13 @@ async function loadMachines() {
       <div class="tbl-wrap">
       <table>
         <thead><tr>
-          <th>Alias</th><th>RustDesk ID</th><th>Tag</th><th>Ghi chú</th><th>Roles</th><th>Thao tác</th>
+          <th>Alias</th><th>RustDesk ID</th><th>Ghi chú</th><th>Roles</th><th>Thao tác</th>
         </tr></thead>
         <tbody>
           ${allMachines.map(m => `
             <tr>
               <td><strong>${esc(m.alias || '—')}</strong></td>
               <td><code>${esc(m.rustdesk_id || '—')}</code></td>
-              <td>${m.tag ? `<span class="badge badge-blue">${esc(m.tag)}</span>` : '—'}</td>
               <td style="color:#666">${esc(m.note || '—')}</td>
               <td>${(m.roles || []).map(r => `<span class="badge badge-blue">${esc(r)}</span>`).join('') || '<span style="color:#aaa">—</span>'}</td>
               <td style="white-space:nowrap">
@@ -813,7 +810,6 @@ async function loadMachines() {
 async function addMachine() {
   const alias      = document.getElementById('nm-alias').value.trim();
   const rustdesk_id = document.getElementById('nm-rustdesk-id').value.trim();
-  const tag        = document.getElementById('nm-tag').value.trim();
   const note       = document.getElementById('nm-note').value.trim();
   const errEl = document.getElementById('add-machine-err');
   errEl.style.display = 'none';
@@ -826,11 +822,11 @@ async function addMachine() {
     const r = await fetch('/admin/api/machines', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ alias, rustdesk_id, tag, note }),
+      body: JSON.stringify({ alias, rustdesk_id, note }),
     });
     const data = await r.json();
     if (!r.ok) { errEl.textContent = 'Lỗi: ' + (data.error || r.status); errEl.style.display = 'block'; return; }
-    ['nm-alias','nm-rustdesk-id','nm-tag','nm-note'].forEach(id => { document.getElementById(id).value = ''; });
+    ['nm-alias','nm-rustdesk-id','nm-note'].forEach(id => { document.getElementById(id).value = ''; });
     await loadMachines();
   } catch (e) { errEl.textContent = 'Lỗi: ' + e.message; errEl.style.display = 'block'; }
 }
@@ -860,8 +856,6 @@ function openEditMachine(machineId) {
       <input id="em-alias"       value="${esc(m.alias       || '')}" placeholder="Alias">
       <label>RustDesk ID</label>
       <input id="em-rustdesk-id" value="${esc(m.rustdesk_id || '')}" placeholder="RustDesk ID">
-      <label>Tag</label>
-      <input id="em-tag"         value="${esc(m.tag         || '')}" placeholder="Tag">
       <label>Ghi chú</label>
       <input id="em-note"        value="${esc(m.note        || '')}" placeholder="Ghi chú">
       <label>Roles được phép truy cập</label>
@@ -880,7 +874,6 @@ async function saveEditMachine(machineId, btn) {
   const dialog = btn.closest('.modal-overlay');
   const alias       = dialog.querySelector('#em-alias').value.trim();
   const rustdesk_id = dialog.querySelector('#em-rustdesk-id').value.trim();
-  const tag         = dialog.querySelector('#em-tag').value.trim();
   const note        = dialog.querySelector('#em-note').value.trim();
   const roles       = [...dialog.querySelectorAll('input.em-role-cb:checked')].map(c => c.value);
   if (!alias) { alert('Alias là bắt buộc.'); return; }
@@ -889,7 +882,7 @@ async function saveEditMachine(machineId, btn) {
     const r = await fetch(`/admin/api/machines/${encodeURIComponent(machineId)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ alias, rustdesk_id, tag, note, roles }),
+      body: JSON.stringify({ alias, rustdesk_id, note, roles }),
     });
     if (!r.ok) { const d = await r.json(); alert('Lỗi: ' + (d.error || r.status)); btn.disabled = false; return; }
     dialog.remove();

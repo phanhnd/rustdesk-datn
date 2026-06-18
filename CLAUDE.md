@@ -214,19 +214,23 @@ node server.js
 ```
 
 ### Kiến trúc
-- **`server.js`** — Node.js gateway, dùng built-ins (`http`, `fs`, `crypto`), không có npm dependencies
+- **`server.js`** — Node.js gateway, dùng built-ins (`http`, `fs`, `crypto`, `node:sqlite`), không có npm dependencies
 - **`public/admin.html`** — Single-page HTML thuần, **3 tab**: Người dùng / Danh sách role / Danh sách máy
-- **`data.json`** (tự sinh) — Persistence; tự migrate từ model cũ (books/peers) sang model mới (machines)
+- **`data/rocky.db`** (tự sinh, SQLite qua `node:sqlite`) — Persistence chính. `data.json` (file cũ) chỉ được đọc **một lần** để migrate dữ liệu lịch sử sang DB nếu bảng `machines` còn rỗng; sau đó không còn được dùng.
 
-### Data model `data.json`
-```json
-{
-  "machines": [{ "id": "<hex>", "alias": "...", "rustdesk_id": "...", "tag": "...", "note": "..." }],
-  "roles":    { "admin": ["<machine-id>", ...], "viewer": ["<machine-id>"] }
-}
+### Data model (SQLite — `data/rocky.db`)
+```sql
+CREATE TABLE machines (
+  id TEXT PRIMARY KEY, alias TEXT, rustdesk_id TEXT, note TEXT
+);
+CREATE TABLE machine_roles (
+  role_name TEXT, machine_id TEXT, PRIMARY KEY (role_name, machine_id)
+);
 ```
-- `machines[].rustdesk_id` — ID thật dùng để kết nối từ RustDesk client (`ab.tis`)
-- `roles[name]` — array of machine internal `id`
+- Không còn trường `tag` (đã bỏ khỏi quản lý máy trạm — xem `docs/admin-ui.md`).
+- `machines.rustdesk_id` — ID thật dùng để kết nối từ RustDesk client (`ab.tis`)
+- `machine_roles` — quan hệ N–N giữa role (Keycloak client role) và machine; thay cho `roles[name]: [machineId,...]` của `data.json` cũ
+- Chi tiết các hàm truy cập DB (`getAllMachines`, `setMachineRoles`, `getMachinesForRoles`, ...) xem `docs/admin-ui.md`
 
 ### Keycloak Service Account (đã config)
 Client `rustdesk-client` đã bật **Service accounts roles** với quyền từ `realm-management`:

@@ -761,7 +761,9 @@ function getAddressBooks() {
             if (data && data.machines) {
                 var seen = {};
                 data.machines.map(function(m) {
-                    if (m.tag && !seen[m.tag]) { seen[m.tag] = true; ab.tags.push(m.tag); }
+                    (m.roles || []).map(function(r) {
+                        if (!seen[r]) { seen[r] = true; ab.tags.push(r); }
+                    });
                 });
                 data.machines.map(function(m) {
                     ab.peers.push({
@@ -770,7 +772,7 @@ function getAddressBooks() {
                         username: "",
                         hostname: "",
                         platform: "",
-                        tags:     m.tag ? [m.tag] : []
+                        tags:     m.roles || []
                     });
                 });
             }

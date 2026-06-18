@@ -4,6 +4,7 @@ const path = require('path');
 const url_module = require('url');
 const crypto = require('crypto');
 const querystring = require('querystring');
+const { DatabaseSync } = require('node:sqlite');
 
 const KEYCLOAK_URL  = 'http://localhost:8080';
 const REALM         = 'rustdesk';
@@ -20,85 +21,166 @@ const adminSessions = new Set();
 let serviceToken = null;
 let serviceTokenExpiry = 0;
 
-const DATA_FILE = path.join(__dirname, 'data.json');
+// ── Database (SQLite via node:sqlite) ───────────────────────────────────────
 
-const DEFAULT_DATA = {
-  machines: [
-    { id: 'demo-01', alias: 'Build Server',  rustdesk_id: '', tag: 'Engineering', note: '' },
-    { id: 'demo-02', alias: 'Marketing PC',  rustdesk_id: '', tag: 'Marketing',   note: '' },
-    { id: 'demo-03', alias: 'K8s Node',      rustdesk_id: '', tag: 'DevOps',      note: '' },
-  ],
-  roles: {
-    admin:  ['demo-01', 'demo-02', 'demo-03'],
-    viewer: ['demo-01'],
-  },
-};
+const DATA_DIR  = path.join(__dirname, 'data');
+const DB_FILE   = path.join(DATA_DIR, 'rocky.db');
+const JSON_FILE = path.join(__dirname, 'data.json'); // chỉ dùng để migrate 1 lần
 
-function loadData() {
-  let data;
+fs.mkdirSync(DATA_DIR, { recursive: true });
+const db = new DatabaseSync(DB_FILE);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS machines (
+    id          TEXT PRIMARY KEY,
+    alias       TEXT NOT NULL DEFAULT '',
+    rustdesk_id TEXT NOT NULL DEFAULT '',
+    note        TEXT NOT NULL DEFAULT ''
+  );
+  CREATE TABLE IF NOT EXISTS machine_roles (
+    role_name  TEXT NOT NULL,
+    machine_id TEXT NOT NULL,
+    PRIMARY KEY (role_name, machine_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_machine_roles_machine ON machine_roles(machine_id);
+`);
+
+function migrateFromJsonIfNeeded() {
+  const count = db.prepare('SELECT COUNT(*) AS n FROM machines').get().n;
+  if (count > 0) return;
+
+  let legacy = null;
   try {
-    const raw = fs.readFileSync(DATA_FILE, 'utf8');
-    data = JSON.parse(raw);
+    legacy = JSON.parse(fs.readFileSync(JSON_FILE, 'utf8'));
   } catch (_) {
-    return JSON.parse(JSON.stringify(DEFAULT_DATA));
+    legacy = null;
   }
 
-  // Migration: old books structure → machines
-  if (data.books && !data.machines) {
-    const machines = [];
-    const bookToIds = {};
-    for (const [bookName, book] of Object.entries(data.books)) {
-      const ids = [];
-      for (const peer of (book.peers || [])) {
-        const mid = crypto.randomBytes(8).toString('hex');
-        machines.push({
-          id:          mid,
-          alias:       peer.alias || peer.name || '',
-          rustdesk_id: peer.id || '',
-          tag:         bookName,
-          note:        '',
-        });
-        ids.push(mid);
-      }
-      bookToIds[bookName] = ids;
+  const insertMachineStmt = db.prepare(
+    'INSERT INTO machines (id, alias, rustdesk_id, note) VALUES (?, ?, ?, ?)'
+  );
+  const insertRoleStmt = db.prepare(
+    'INSERT OR IGNORE INTO machine_roles (role_name, machine_id) VALUES (?, ?)'
+  );
+
+  if (legacy && Array.isArray(legacy.machines)) {
+    // Di trú từ data.json (bỏ field "tag")
+    for (const m of legacy.machines) {
+      insertMachineStmt.run(
+        m.id || crypto.randomBytes(8).toString('hex'),
+        m.alias || '',
+        m.rustdesk_id || '',
+        m.note || ''
+      );
     }
-    const newRoles = {};
-    for (const [role, bookNames] of Object.entries(data.roles || {})) {
-      const mids = new Set();
-      for (const bn of bookNames) {
-        (bookToIds[bn] || []).forEach(id => mids.add(id));
-      }
-      newRoles[role] = [...mids];
+    for (const [roleName, ids] of Object.entries(legacy.roles || {})) {
+      for (const mid of ids) insertRoleStmt.run(roleName, mid);
     }
-    data.machines = machines;
-    data.roles = newRoles;
-    delete data.books;
-    saveData(data);
+  } else {
+    // Không có data.json cũ → seed demo machines
+    const demo = [
+      { id: 'demo-01', alias: 'Build Server', rustdesk_id: '', note: '' },
+      { id: 'demo-02', alias: 'Marketing PC', rustdesk_id: '', note: '' },
+      { id: 'demo-03', alias: 'K8s Node',     rustdesk_id: '', note: '' },
+    ];
+    for (const m of demo) insertMachineStmt.run(m.id, m.alias, m.rustdesk_id, m.note);
+    insertRoleStmt.run('admin', 'demo-01');
+    insertRoleStmt.run('admin', 'demo-02');
+    insertRoleStmt.run('admin', 'demo-03');
+    insertRoleStmt.run('viewer', 'demo-01');
   }
-
-  if (!data.machines) data.machines = JSON.parse(JSON.stringify(DEFAULT_DATA.machines));
-  if (!data.roles || Object.keys(data.roles).length === 0) {
-    data.roles = JSON.parse(JSON.stringify(DEFAULT_DATA.roles));
-  }
-
-  // Normalize machine fields
-  data.machines = data.machines.map(m => ({
-    id:          m.id          || crypto.randomBytes(8).toString('hex'),
-    alias:       m.alias       || '',
-    rustdesk_id: m.rustdesk_id || '',
-    tag:         m.tag         || '',
-    note:        m.note        || '',
-  }));
-
-  saveData(data);
-  return data;
 }
 
-function saveData(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
+migrateFromJsonIfNeeded();
+
+function attachRoles(machines) {
+  const rows = db.prepare('SELECT role_name, machine_id FROM machine_roles').all();
+  const rolesByMachine = {};
+  for (const row of rows) {
+    (rolesByMachine[row.machine_id] = rolesByMachine[row.machine_id] || []).push(row.role_name);
+  }
+  return machines.map(m => ({ ...m, roles: rolesByMachine[m.id] || [] }));
 }
 
-let appData = loadData();
+function getAllMachines() {
+  const machines = db.prepare('SELECT id, alias, rustdesk_id, note FROM machines').all();
+  return attachRoles(machines);
+}
+
+function getMachineById(id) {
+  return db.prepare('SELECT id, alias, rustdesk_id, note FROM machines WHERE id = ?').get(id) || null;
+}
+
+function getMachineByRustdeskId(rustdeskId) {
+  return db.prepare('SELECT id, alias, rustdesk_id, note FROM machines WHERE rustdesk_id = ?').get(rustdeskId) || null;
+}
+
+function machineExists(id) {
+  return !!db.prepare('SELECT 1 FROM machines WHERE id = ?').get(id);
+}
+
+function insertMachine({ alias, rustdesk_id, note }) {
+  const id = crypto.randomBytes(8).toString('hex');
+  db.prepare('INSERT INTO machines (id, alias, rustdesk_id, note) VALUES (?, ?, ?, ?)')
+    .run(id, alias || '', rustdesk_id || '', note || '');
+  return id;
+}
+
+function updateMachine(id, { alias, rustdesk_id, note }) {
+  const existing = getMachineById(id);
+  if (!existing) return false;
+  db.prepare('UPDATE machines SET alias = ?, rustdesk_id = ?, note = ? WHERE id = ?').run(
+    alias       !== undefined ? alias       : existing.alias,
+    rustdesk_id !== undefined ? rustdesk_id : existing.rustdesk_id,
+    note        !== undefined ? note        : existing.note,
+    id
+  );
+  return true;
+}
+
+function deleteMachine(id) {
+  db.prepare('DELETE FROM machine_roles WHERE machine_id = ?').run(id);
+  db.prepare('DELETE FROM machines WHERE id = ?').run(id);
+}
+
+function setMachineRoles(machineId, roleNames) {
+  db.prepare('DELETE FROM machine_roles WHERE machine_id = ?').run(machineId);
+  const stmt = db.prepare('INSERT OR IGNORE INTO machine_roles (role_name, machine_id) VALUES (?, ?)');
+  for (const roleName of (roleNames || [])) stmt.run(roleName, machineId);
+}
+
+function getRolesMap() {
+  const rows = db.prepare('SELECT role_name, machine_id FROM machine_roles').all();
+  const map = {};
+  for (const row of rows) {
+    (map[row.role_name] = map[row.role_name] || []).push(row.machine_id);
+  }
+  return map;
+}
+
+function setRoleMachineIds(roleName, ids) {
+  db.prepare('DELETE FROM machine_roles WHERE role_name = ?').run(roleName);
+  const stmt = db.prepare('INSERT OR IGNORE INTO machine_roles (role_name, machine_id) VALUES (?, ?)');
+  for (const id of ids) {
+    if (machineExists(id)) stmt.run(roleName, id);
+  }
+}
+
+function deleteRoleMapping(roleName) {
+  db.prepare('DELETE FROM machine_roles WHERE role_name = ?').run(roleName);
+}
+
+function getMachinesForRoles(roleNames) {
+  if (!roleNames || !roleNames.length) return [];
+  const placeholders = roleNames.map(() => '?').join(',');
+  const rows = db.prepare(
+    `SELECT DISTINCT m.id, m.alias, m.rustdesk_id, m.note
+       FROM machines m
+       JOIN machine_roles mr ON mr.machine_id = m.id
+      WHERE mr.role_name IN (${placeholders})`
+  ).all(...roleNames);
+  return attachRoles(rows);
+}
 
 const sessions = new Map();
 
@@ -188,15 +270,6 @@ function getRolesFromPayload(payload) {
     if (Array.isArray(clientRoles)) roles.push(...clientRoles);
   }
   return roles;
-}
-
-function getMachinesForRoles(roles) {
-  const ids = new Set();
-  for (const role of roles) {
-    const mapped = appData.roles[role];
-    if (mapped) mapped.forEach(id => ids.add(id));
-  }
-  return [...ids].map(id => appData.machines.find(m => m.id === id)).filter(Boolean);
 }
 
 function parseCookies(req) {
@@ -440,8 +513,7 @@ http.createServer(async (req, res) => {
         const uuid = await getClientUuid();
         const delRes = await keycloakAdminRequest('DELETE', `/clients/${uuid}/roles/${encodeURIComponent(roleName)}`, null);
         if (delRes.status === 204 || delRes.status === 200) {
-          delete appData.roles[roleName];
-          saveData(appData);
+          deleteRoleMapping(roleName);
           jsonResponse(res, 200, { ok: true });
         } else {
           jsonResponse(res, delRes.status, { error: delRes.body });
@@ -467,15 +539,17 @@ http.createServer(async (req, res) => {
       } catch (err) {
         kcError = err.message;
         // Fallback: dùng tên role từ local data
-        kcRolesList = Object.keys(appData.roles).map(name => ({ name }));
+        kcRolesList = Object.keys(getRolesMap()).map(name => ({ name }));
       }
 
+      const rolesMap = getRolesMap();
+      const allMachinesById = new Map(getAllMachines().map(m => [m.id, m]));
       const roleDetails = await Promise.all(kcRolesList.map(async kcRole => {
-        const machine_ids = appData.roles[kcRole.name] || [];
+        const machine_ids = rolesMap[kcRole.name] || [];
         const machines = machine_ids
-          .map(id => appData.machines.find(m => m.id === id))
+          .map(id => allMachinesById.get(id))
           .filter(Boolean)
-          .map(m => ({ id: m.id, alias: m.alias, rustdesk_id: m.rustdesk_id, tag: m.tag }));
+          .map(m => ({ id: m.id, alias: m.alias, rustdesk_id: m.rustdesk_id }));
 
         let users = [];
         if (!kcError && clientUuid) {
@@ -503,13 +577,10 @@ http.createServer(async (req, res) => {
 
     if (req.method === 'PUT' && p === '/admin/api/roles') {
       // body: { roleName: [machineIds], ... }
-      const newRoles = {};
       for (const [roleName, ids] of Object.entries(body)) {
         if (!Array.isArray(ids)) continue;
-        newRoles[roleName] = ids.filter(id => appData.machines.some(m => m.id === id));
+        setRoleMachineIds(roleName, ids);
       }
-      appData.roles = newRoles;
-      saveData(appData);
       jsonResponse(res, 200, { ok: true });
       return;
     }
@@ -517,76 +588,39 @@ http.createServer(async (req, res) => {
     // ── Machines CRUD ─────────────────────────────────────────────────────
 
     if (req.method === 'GET' && p === '/admin/api/machines') {
-      const machinesWithRoles = appData.machines.map(m => {
-        const roles = Object.entries(appData.roles)
-          .filter(([, ids]) => ids.includes(m.id))
-          .map(([name]) => name);
-        return { ...m, roles };
-      });
-      jsonResponse(res, 200, machinesWithRoles);
+      jsonResponse(res, 200, getAllMachines());
       return;
     }
 
     if (req.method === 'POST' && p === '/admin/api/machines') {
-      const machine = {
-        id:          crypto.randomBytes(8).toString('hex'),
+      const id = insertMachine({
         alias:       (body.alias       || '').trim(),
         rustdesk_id: (body.rustdesk_id || '').trim(),
-        tag:         (body.tag         || '').trim(),
         note:        (body.note        || '').trim(),
-      };
-      appData.machines.push(machine);
-      if (Array.isArray(body.roles)) {
-        for (const roleName of body.roles) {
-          if (!appData.roles[roleName]) appData.roles[roleName] = [];
-          if (!appData.roles[roleName].includes(machine.id)) appData.roles[roleName].push(machine.id);
-        }
-      }
-      saveData(appData);
-      jsonResponse(res, 200, { ok: true, id: machine.id });
+      });
+      if (Array.isArray(body.roles)) setMachineRoles(id, body.roles);
+      jsonResponse(res, 200, { ok: true, id });
       return;
     }
 
     const machineMatch = p.match(/^\/admin\/api\/machines\/([^/]+)$/);
     if (machineMatch) {
       const mid = decodeURIComponent(machineMatch[1]);
-      const idx = appData.machines.findIndex(m => m.id === mid);
 
       if (req.method === 'PUT') {
-        if (idx === -1) { jsonResponse(res, 404, { error: 'Machine not found' }); return; }
-        const existing = appData.machines[idx];
-        appData.machines[idx] = {
-          id:          mid,
-          alias:       body.alias       !== undefined ? String(body.alias).trim()       : existing.alias,
-          rustdesk_id: body.rustdesk_id !== undefined ? String(body.rustdesk_id).trim() : existing.rustdesk_id,
-          tag:         body.tag         !== undefined ? String(body.tag).trim()         : existing.tag,
-          note:        body.note        !== undefined ? String(body.note).trim()        : existing.note,
-        };
-        if (Array.isArray(body.roles)) {
-          const wantedRoles = new Set(body.roles);
-          for (const [roleName, ids] of Object.entries(appData.roles)) {
-            const has  = ids.includes(mid);
-            const want = wantedRoles.has(roleName);
-            if (want && !has) ids.push(mid);
-            if (!want && has) appData.roles[roleName] = ids.filter(id => id !== mid);
-          }
-          for (const roleName of wantedRoles) {
-            if (!appData.roles[roleName]) appData.roles[roleName] = [mid];
-          }
-        }
-        saveData(appData);
+        const updated = updateMachine(mid, {
+          alias:       body.alias       !== undefined ? String(body.alias).trim()       : undefined,
+          rustdesk_id: body.rustdesk_id !== undefined ? String(body.rustdesk_id).trim() : undefined,
+          note:        body.note        !== undefined ? String(body.note).trim()        : undefined,
+        });
+        if (!updated) { jsonResponse(res, 404, { error: 'Machine not found' }); return; }
+        if (Array.isArray(body.roles)) setMachineRoles(mid, body.roles);
         jsonResponse(res, 200, { ok: true });
         return;
       }
 
       if (req.method === 'DELETE') {
-        if (idx !== -1) appData.machines.splice(idx, 1);
-        // Remove machine id from all roles
-        for (const arr of Object.values(appData.roles)) {
-          const i = arr.indexOf(mid);
-          if (i >= 0) arr.splice(i, 1);
-        }
-        saveData(appData);
+        deleteMachine(mid);
         jsonResponse(res, 200, { ok: true });
         return;
       }
@@ -687,14 +721,16 @@ http.createServer(async (req, res) => {
   if (req.method === 'POST' && p === '/api/check-access') {
     const authHeader = req.headers['authorization'] || '';
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-    const rustdesk_id = (body || {}).rustdesk_id;
+    const rawCheckBody = await readBody(req);
+    let checkBody = {};
+    try { if (rawCheckBody) checkBody = JSON.parse(rawCheckBody); } catch (_) {}
+    const rustdesk_id = checkBody.rustdesk_id;
     if (!rustdesk_id) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'missing rustdesk_id' }));
       return;
     }
-    const appData = loadData();
-    const machine = appData.machines.find(m => m.rustdesk_id === rustdesk_id);
+    const machine = getMachineByRustdeskId(rustdesk_id);
     // Máy không thuộc hệ thống → không chặn
     if (!machine) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
