@@ -19,46 +19,41 @@ jobs:
         submodules: recursive
     
     - name: Setup Rust
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@stable
       with:
-        toolchain: stable
-        override: true
-    
+        toolchain: "1.75.0" # required for Sciter ABI compat, see https://github.com/rustdesk/rustdesk/discussions/7503
+
     - name: Setup Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
-    
+
+    - name: Install LLVM and Clang
+      uses: KyleMayes/install-llvm-action@v1
+      with:
+        version: "15.0.6"
+
     - name: Setup vcpkg
-      uses: lukka/run-vcpkg@v10
+      uses: lukka/run-vcpkg@v11
       with:
         vcpkgDirectory: ${{ runner.workspace }}/vcpkg
-    
+        vcpkgGitCommitId: "120deac3062162151622ca4860575a33844ba10b"
+
     - name: Install dependencies via vcpkg
       run: |
-        cd ${{ runner.workspace }}/vcpkg
-        ./vcpkg install libvpx:x64-windows-static-md
-        ./vcpkg install libyuv:x64-windows-static-md
-        ./vcpkg install opus:x64-windows-static-md
-        ./vcpkg install aom:x64-windows-static-md
+        $VCPKG_ROOT/vcpkg install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"
       shell: bash
-    
-    - name: Set VCPKG_ROOT
-      run: echo "VCPKG_ROOT=${{ runner.workspace }}/vcpkg" >> $env:GITHUB_ENV
-    
+
     - name: Build RustDesk for Windows
       run: python build.py --portable
-      env:
-        VCPKG_ROOT: ${{ runner.workspace }}/vcpkg
-    
+
     - name: Upload Windows artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: rustdesk-windows
         path: |
-          *.exe
-          target/release/rustdesk.exe
-          target/release/rustdesk-portable.exe
+          target/release/RustDesk.exe
+          rustdesk-*-win7-install.exe
 
   # ============ BUILD CHO LINUX (Ubuntu) ============
   build-linux:

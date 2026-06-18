@@ -44,6 +44,32 @@ sudo apt install -y zip g++ gcc git curl wget nasm yasm libgtk-3-dev clang \
 vcpkg install libvpx libyuv opus aom
 ```
 
+### Windows .exe via GitHub Actions (`.github/workflows/build.yml`)
+
+The `build-windows` job builds the Sciter (non-Flutter) client and uploads a self-extracting
+installer `.exe` as a workflow artifact. Triggers: push/PR to `main`/`master`, or manual
+`workflow_dispatch`.
+
+Pipeline: `dtolnay/rust-toolchain` pinned to **Rust 1.75.0** → LLVM/Clang 15.0.6 (`bindgen` needs
+`libclang`) → `lukka/run-vcpkg` pinned to the commit in root `vcpkg.json`
+(`120deac3...844ba10b`) → `vcpkg install --triplet x64-windows-static --x-install-root=...`
+(manifest mode, reads `vcpkg.json`) → `python build.py --portable`.
+
+Caveats discovered while fixing this job (see git history of `build.yml`):
+- **Rust must stay pinned ≤1.77.** Rust 1.78+ changed i128 ABI layout, which breaks the pinned
+  `sciter-rs` crate. Do not bump this toolchain to `stable`/`latest`.
+- **vcpkg triplet must be `x64-windows-static`** (no `-md` suffix) — `libs/scrap/build.rs:50`
+  hardcodes this triplet when probing for vcpkg libraries on Windows.
+- `build.py --portable` renames the binary to `target/release/RustDesk.exe` (capitalized) and
+  always packs a self-extracting installer to the **repo root** as
+  `rustdesk-{version}-win7-install.exe` — that root-level file is the actual deliverable `.exe`,
+  not anything under `target/release/`.
+- `actions/upload-artifact` must be `@v4` or newer; `v1`-`v3` are sunset by GitHub and fail
+  outright.
+
+`build-linux` job in the same file is a separate, currently-unverified job — not covered by the
+above.
+
 ## Architecture
 
 ### Session / Client Flow (`src/client.rs`, `src/client/`)
