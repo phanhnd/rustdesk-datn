@@ -168,6 +168,12 @@ All session-driven UI events are abstracted behind the `InvokeUiSession` trait (
 #### Address Book (`src/ui/ab.tis`)
 Cloud-synced contact list tied to a user account. Requires login (`access_token`). Appears as the 4th tab in `MultipleSessions`; hidden when `disable_account` or `disable_ab` is set.
 
+> In this fork, the actual login + AB listing source has been replaced with a Keycloak/gateway flow
+> (`loginWithKeycloak`, `getAddressBooks` in `ab.tis` → `server.js`). Full sequence diagrams for
+> login, check-access-before-connect, and logout, plus known risks (unverified JWT signature,
+> fail-open access check, silent revoke failure, shared `ASYNC_JOB_STATUS` race) are in
+> [`docs/address-book.md`](docs/address-book.md).
+
 **Data model** (`libs/hbb_common/src/config.rs`):
 - `Ab` — top-level container: `access_token` + `ab_entries: Vec<AbEntry>`
 - `AbEntry` — one address book (personal or shared): `guid`, `name`, `tags`, `tag_colors`, `peers: Vec<AbPeer>`
@@ -220,21 +226,61 @@ Cloud-synced contact list tied to a user account. Requires login (`access_token`
 - Nếu task liên quan đến nghiệp vụ đặc thù của một module cụ thể (ví dụ: Address Book, File Transfer, Remote Session...), tạo file `docs/<module>.md` riêng mô tả: mục đích, luồng xử lý, các hàm/file chính, và những thay đổi đã thực hiện.
 - Mỗi file `docs/<module>.md` nên có cấu trúc: **Overview** → **Key Files** → **Flow** → **Change Log** (ghi ngắn gọn từng thay đổi theo thứ tự thời gian).
 
-## Rebrand: ROCKY + Blue Theme
+## Rebrand: ROCKY + Navy/Teal Theme
 
-App đã được đổi tên và màu sắc. Khi làm việc với UI, dùng palette xanh sau:
+App đã được đổi tên và đổi màu theo bộ nhận diện thương hiệu mới (logomark lục giác
+6 chấm + nền navy đậm). Khi làm việc với UI, dùng palette sau:
 
-| CSS Variable | Giá trị |
-|---|---|
-| `accent` | `#1565C0` |
-| `button` | `#42A5F5` |
-| `menu-hover` | `#E3F2FD` |
-| `dark-red` (nay dùng làm navy) | `#0D47A1` |
+| CSS Variable | Giá trị | Nguồn |
+|---|---|---|
+| `accent` | `#00D2D3` | teal — logomark + chữ ROCKY |
+| `button` | `#58D0F8` | xanh nhạt — chấm giữa logomark |
+| `menu-hover` | `#DDF7F6` | tint nhạt của teal |
+| `dark-red` (nay dùng làm navy) | `#111D43` | nền navy đậm |
+| `text` | `#16234F` | chữ chính (trước là `#222`) |
+| `light-text` | `#5C6F94` | chữ phụ/label (trước là `#666`) |
+| `lighter-text` | `#8B9BC2` | chữ mờ nhất (trước là `#888`) |
+| `border` | `#D7E3F3` | viền input/divider (trước là `#ccc`) |
+
+Bộ màu chữ/viền này được đồng bộ theo đúng `--text`/`--text-muted`/`--border` đang dùng ở
+`public/admin.html` (sau khi đổi sang theme sáng) để 2 mặt UI (app desktop + admin web)
+cùng tông navy/teal thay vì xám trung tính mặc định. **Lưu ý cú pháp:** Sciter KHÔNG hỗ
+trợ `:root{--x}`/`var(--x)` kiểu browser — phải khai báo qua `var(name): value;` trong
+block `html { ... }` của `common.css` và đọc bằng `color(name)`.
 
 **Files đã thay đổi:**
 - `libs/hbb_common/src/config.rs:72` — `APP_NAME = "ROCKY"`
-- `src/ui/common.css` — CSS variables tông xanh
-- `src/ui/index.css:344` — gradient hardcode đổi sang xanh
+- `src/ui/common.css:2-13` — CSS variables tông navy/teal
+- `src/ui/index.css:344` — gradient hardcode đổi sang navy → teal
+- `src/ui/inline.rs` — bundle inline (sinh lại bằng `python3 res/inline-sciter.py` mỗi khi
+  sửa CSS/TIS trong `src/ui/`, dùng cho build Windows có feature `inline`)
+- `src/lang/en.rs:9` — `Slogan_tip` = "Think Like Hustler." (tagline mới, hiển thị ở
+  About dialog `src/ui/index.tis:613`)
+- Icon app: **không** còn dùng logo mũi tên RustDesk gốc. Icon cửa sổ trong app là PNG
+  base64 nhúng trực tiếp ở `src/ui.rs` (hàm `get_icon()`, 2 nhánh macOS/non-macOS) —
+  build-time icon ở `res/icon.ico`, `res/tray-icon.ico`, `res/32x32.png` …
+  `res/128x128@2x.png`, `res/mac-icon.png`, `res/mac-tray-*-x2.png`, `res/scalable.svg`.
+  Tất cả được crop từ logomark gốc (loại bỏ chữ "ROCKY"/tagline), nền trong suốt.
+- `input[type=text/password/number]` (`common.css`) — `border-radius: 0` → `0.4em` để
+  khớp bo góc `button.button` (0.5em); `button.button`/`button.outline` thêm
+  `font-weight: 600` để chữ nút đậm như `.btn` của admin.html.
+- `.card-connect` (qua `@mixin CARD`, `src/ui/index.css:171-181`) — thêm
+  `box-shadow: 0 1px 6px rgba(22,35,79,.12)` cho có độ nổi nhẹ giống card admin.html.
+- **Khung cảnh báo Wayland đã bị bỏ.** `ModifyDefaultLogin` (cảnh báo
+  "wayland_experiment_tip", chỉ hiện khi `handler.current_is_wayland()`) đã bị xoá khỏi
+  `src/ui/index.tis`, thay bằng component `BrandLogo` render **không điều kiện** —
+  luôn hiện logomark (`<img src={handler.get_icon()}/>`, CSS `.brand-logo-pane` ở
+  `src/ui/index.css`) tại đúng vị trí cũ trong `.left-pane`. Cảnh báo Wayland không còn
+  hiển thị cho user nữa (đánh đổi đã được user xác nhận). `FixWayland` (cảnh báo Wayland
+  khác, dòng `index.tis:742`) vẫn giữ nguyên, không liên quan thay đổi này.
+
+> **Admin UI dùng theme riêng, KHÁC với bảng trên.** `public/admin.html` không theme
+> nền navy đậm — sau phản hồi "quá tối" đã đổi thành theme sáng (nền trắng `#F7FAFF`,
+> accent teal đậm `#00B8B8`, chi tiết ở `docs/admin-ui.md` Change Log). Khi sửa
+> `public/admin.html`, dùng bộ biến CSS riêng khai báo trong `:root` của file đó
+> (`--bg`, `--surface`, `--surface-2`, `--accent`, `--accent-2`, `--text`,
+> `--text-muted`, `--border`, `--danger`, `--danger-strong`, `--success`), không phải
+> palette navy/teal của Sciter UI ở trên.
 
 > Tên app lấy từ `APP_NAME` duy nhất — toàn bộ UI gọi qua `get_app_name()`, không hardcode ở nơi khác.
 

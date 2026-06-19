@@ -1,16 +1,16 @@
 html {
-    var(accent): #1565C0;
-    var(button): #42A5F5;
+    var(accent): #00D2D3;
+    var(button): #58D0F8;
     var(gray-bg): #eee;
     var(bg): white;
-    var(border): #ccc;
+    var(border): #D7E3F3;
     var(hover-border): #999;
-    var(text): #222;
+    var(text): #16234F;
     var(placeholder): #aaa;
-    var(lighter-text): #888;
-    var(light-text): #666;
-    var(menu-hover): #E3F2FD;
-    var(dark-red): #0D47A1;
+    var(lighter-text): #8B9BC2;
+    var(light-text): #5C6F94;
+    var(menu-hover): #DDF7F6;
+    var(dark-red): #111D43;
     var(dark-yellow): #FBC732;
     var(dark-blue): #2E2459;
     var(green-blue): #197260;
@@ -47,6 +47,7 @@ button.button {
     color: color(bg);
     border-color: color(button);
     min-width: 40px;
+    font-weight: 600;
 }
 
 button[type=checkbox], button[type=checkbox]:active {
@@ -60,6 +61,7 @@ button.outline {
     border: color(border) solid 1px;
     background: transparent;
     color: color(text);
+    font-weight: 600;
 }
 
 button.button:active, button.active {
@@ -90,7 +92,7 @@ input[type=text], input[type=password], input[type=number] {
     width: *;
     font-size: 1.5em;
     border-color: color(border);
-    border-radius: 0;
+    border-radius: 0.4em;
     color: color(text);
     padding-left: 0.5em;
     background: color(bg);

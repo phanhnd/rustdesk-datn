@@ -173,6 +173,7 @@ span.clear-input:hover {
     border-spacing: 1em;
     background: color(bg);
     border-radius: 1em;
+    box-shadow: 0 1px 6px rgba(22,35,79,.12);
 }
 
 .card-connect {
@@ -341,7 +342,34 @@ div.install-me, div.trust-me {
     margin-top: 0.5em;
     padding: 20px;
     color: white;
-    background: linear-gradient(left,#1565C0,#42A5F5);
+    background: linear-gradient(left,#111D43,#00D2D3);
+}
+
+.brand-logo-pane {
+    margin-top: 0.5em;
+    padding: 12px 0;
+    text-align: center;
+}
+
+.brand-logo-pane img {
+    width: 64px;
+    height: 64px;
+}
+
+.brand-logo-pane .brand-name {
+    margin-top: 0.4em;
+    font-size: 1.1em;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+    color: color(accent);
+}
+
+.brand-logo-pane .brand-tagline {
+    margin-top: 0.2em;
+    font-size: 0.8em;
+    font-weight: 600;
+    font-style: italic;
+    color: color(button);
 }
 
 div.trust-me > div:nth-child(1),

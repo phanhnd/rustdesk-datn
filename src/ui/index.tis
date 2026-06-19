@@ -740,7 +740,7 @@ class App: Reactor.Component
                     {!service_stopped && is_can_screen_recording && handler.is_process_trusted(false) && handler.is_installed() && !handler.is_installed_daemon(false) ? <InstallDaemon /> : ""}
                     {system_error ? <SystemError /> : ""}
                     {!system_error && handler.is_login_wayland() && !handler.current_is_wayland() ? <FixWayland /> : ""}
-                    {!system_error && handler.current_is_wayland() ? <ModifyDefaultLogin /> : ""}
+                    <BrandLogo />
                     {incoming_only ? <ConnectStatus @{this.connect_status} /> : ""}
                 </div>
                 {!incoming_only && <div .right-pane>
@@ -946,17 +946,13 @@ class FixWayland: Reactor.Component {
     }
 }
 
-class ModifyDefaultLogin: Reactor.Component {
+class BrandLogo: Reactor.Component {
     function render() {
-        return <div .trust-me>
-            <div>{translate('Warning')}</div>
-            <div>{translate('wayland_experiment_tip')}</div>
-            <div #help-me .link>{translate('Help')}</div>
+        return <div .brand-logo-pane>
+            <img src={handler.get_icon()} />
+            <div .brand-name>{handler.get_app_name()}</div>
+            <div .brand-tagline>{translate('Slogan_tip')}</div>
         </div>;
-    }
-
-    event click $(#help-me) {
-        handler.open_url(translate("doc_fix_wayland"));
     }
 }
 
