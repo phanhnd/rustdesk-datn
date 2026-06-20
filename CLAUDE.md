@@ -79,8 +79,23 @@ Caveats discovered while fixing this job — full change log with root causes in
   `-e` flag must point at the real `RustDesk.exe` inside `resources/`, not the desired output
   filename.
 
-`build-linux` job in the same file is a separate, currently-unverified job — not covered by the
-above.
+### Linux `.deb`/`.AppImage` and macOS `.dmg` via GitHub Actions (`.github/workflows/build.yml`)
+
+`build-linux` and `build-macos` jobs in the same file build the Sciter client for those platforms.
+Full root-cause change log in [`docs/ci-linux-macos-build.md`](docs/ci-linux-macos-build.md):
+- `build-linux` must also pin Rust to **1.75.0** (same Sciter ABI constraint as Windows) and must
+  set up `VCPKG_ROOT` via `vcpkg install --triplet x64-linux` — `libs/scrap/build.rs` panics on
+  Linux if `VCPKG_ROOT` is unset (it only falls back to system `pkg-config` when the cargo feature
+  `linux-pkg-config` is explicitly enabled, which `build.py` never passes).
+- The Sciter runtime for Linux (`libsciter-gtk.so`) and macOS (`libsciter.dylib`) is not vendored
+  anywhere in this repo (same story as `sciter.dll` on Windows, above) — each job must `curl` it
+  from `c-smile/sciter-sdk` into the repo root before building.
+- `build.py`'s plain-Linux `.deb` packaging branch had two path bugs (referenced `DEBIAN/` and
+  `pam.d/` at the repo root instead of `res/DEBIAN/` and `res/pam.d/`) that made deb packaging fail
+  outright — fixed.
+- `build-macos` is a **new** job; upstream RustDesk has no CI job that builds the native Sciter
+  client for macOS (only Flutter macOS), so this path is based on `build.py`'s existing
+  (previously CI-unexercised) osx/non-flutter branch.
 
 ## Architecture
 

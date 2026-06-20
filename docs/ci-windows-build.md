@@ -77,3 +77,14 @@ Job `build-linux` trong cùng file **chưa được rà soát/sửa** trong quá
   và đặt tên lại thành `rustdesk-{version}-win7-install.exe` ở repo root.
   **Trạng thái: đã sửa, chưa có lần chạy CI nào xác nhận thành công hoàn toàn end-to-end** — lần chạy
   gần nhất dừng ở đúng lỗi này; cần chạy lại để verify.
+
+- **2026-06-20 — Thêm `sciter.dll` vào pipeline (trước đó hoàn toàn thiếu).**
+  `sciter-rs` (branch `dyn`) load `sciter.dll` **động lúc runtime** (`sciter::set_library()` trong
+  `src/ui.rs:62-73`, tìm file cạnh exe); engine này không tự build/link tĩnh và không có port nào
+  trong `vcpkg.json`. Thiếu file này, app build ra chạy sẽ lỗi runtime
+  `"'sciter.dll' was not found neither in PATH nor near the current executable"` (xem comment ở
+  `src/platform/windows.rs:2157`). → Thêm step `curl` tải bản `x64` từ
+  `c-smile/sciter-sdk` (`bin.win/x64/sciter.dll`, khớp triplet `x64-windows-static`) trước bước
+  build; thêm vào `build.py` (sau dòng `cp ... RustDesk.exe {res_dir}`) việc copy file này vào cả
+  `target/release/` (để cạnh exe thô) và `resources/` (để `generate.py` đóng gói luôn vào file
+  installer `.exe`).

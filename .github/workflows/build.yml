@@ -11,13 +11,13 @@ jobs:
   # ============ BUILD CHO WINDOWS ============
   build-windows:
     runs-on: windows-latest
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
       with:
         submodules: recursive
-    
+
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@stable
       with:
@@ -63,32 +63,43 @@ jobs:
   # ============ BUILD CHO LINUX (Ubuntu) ============
   build-linux:
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
       with:
         submodules: recursive
-    
+
     - name: Setup Rust
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@stable
       with:
-        toolchain: stable
-        override: true
-    
+        toolchain: "1.75.0" # required for Sciter ABI compat, same constraint as Windows build
+
     - name: Setup Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
-    
+
     - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y \
           build-essential \
           pkg-config \
+          zip \
+          curl \
+          wget \
+          nasm \
+          yasm \
+          clang \
+          libclang-dev \
+          cmake \
+          ninja-build \
           libgtk-3-dev \
           libx11-dev \
+          libxcb-randr0-dev \
+          libxdo-dev \
+          libxfixes-dev \
           libxcb-shape0-dev \
           libxcb-xfixes0-dev \
           libxkbcommon-dev \
@@ -99,18 +110,101 @@ jobs:
           libv4l-dev \
           libpulse-dev \
           libasound2-dev \
-          libopus-dev \
-          libvpx-dev \
-          libyuv-dev
-    
+          libpam0g-dev \
+          libgstreamer1.0-dev \
+          libgstreamer-plugins-base1.0-dev
+
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11
+      with:
+        vcpkgDirectory: ${{ runner.workspace }}/vcpkg
+        vcpkgGitCommitId: "120deac3062162151622ca4860575a33844ba10b"
+
+    # libvpx/libyuv/opus/aom/ffmpeg are resolved via vcpkg (VCPKG_ROOT), not apt -
+    # libs/scrap/build.rs panics if VCPKG_ROOT is unset on Linux without the
+    # "linux-pkg-config" cargo feature.
+    - name: Install dependencies via vcpkg
+      run: |
+        $VCPKG_ROOT/vcpkg install --triplet x64-linux --x-install-root="$VCPKG_ROOT/installed"
+      shell: bash
+
+    - name: Install cargo-bundle
+      run: cargo install cargo-bundle --locked
+
+    - name: Download libsciter-gtk.so
+      run: curl -LJ -o libsciter-gtk.so https://github.com/c-smile/sciter-sdk/raw/master/bin.lnx/x64/libsciter-gtk.so
+
     - name: Build RustDesk for Linux
       run: python3 build.py --hwcodec
-    
-    - name: Upload Linux artifacts
-      uses: actions/upload-artifact@v3
+
+    - name: Upload Linux .deb artifact
+      uses: actions/upload-artifact@v4
       with:
-        name: rustdesk-linux
+        name: rustdesk-linux-deb
         path: |
-          target/debian/*.deb
+          rustdesk-*.deb
           target/release/rustdesk
-          *.AppImage
+          libsciter-gtk.so
+
+    - name: Build AppImage
+      run: |
+        sudo apt-get install -y libarchive-tools libfuse2
+        sudo pip3 install git+https://github.com/rustdesk-org/appimage-builder.git
+        cp rustdesk-*.deb appimage/rustdesk.deb
+        cd appimage
+        sudo appimage-builder --skip-tests --recipe ./AppImageBuilder-x86_64.yml
+
+    - name: Upload AppImage artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: rustdesk-linux-appimage
+        path: appimage/*.AppImage
+
+  # ============ BUILD CHO macOS ============
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      with:
+        submodules: recursive
+
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: "1.75.0" # required for Sciter ABI compat, same constraint as Windows/Linux build
+
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install build tools
+      run: brew install nasm yasm ninja create-dmg
+
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11
+      with:
+        vcpkgDirectory: ${{ runner.workspace }}/vcpkg
+        vcpkgGitCommitId: "120deac3062162151622ca4860575a33844ba10b"
+
+    - name: Install dependencies via vcpkg
+      run: $VCPKG_ROOT/vcpkg install --x-install-root="$VCPKG_ROOT/installed"
+
+    - name: Install cargo-bundle
+      run: cargo install cargo-bundle --locked
+
+    - name: Download libsciter.dylib
+      run: curl -LJ -o libsciter.dylib https://github.com/c-smile/sciter-sdk/raw/master/bin.osx/libsciter.dylib
+
+    - name: Build RustDesk for macOS
+      run: python3 build.py
+
+    - name: Upload macOS artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: rustdesk-macos
+        path: |
+          rustdesk-*.dmg
+          target/release/bundle/osx/RustDesk.app
