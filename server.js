@@ -286,6 +286,14 @@ async function introspectToken(token, clientId, clientSecret) {
   return JSON.parse(result.body);
 }
 
+function buildKeycloakLogoutUrl(postLogoutPath) {
+  const params = new URLSearchParams({
+    client_id: ADMIN_CLIENT_ID,
+    post_logout_redirect_uri: `http://${VM_HOST}${postLogoutPath}`,
+  });
+  return `${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/logout?${params}`;
+}
+
 function parseCookies(req) {
   const cookies = {};
   const header = req.headers.cookie || '';
@@ -403,8 +411,11 @@ http.createServer(async (req, res) => {
       const introspection = await introspectToken(tokenData.access_token, ADMIN_CLIENT_ID, ADMIN_CLIENT_SECRET);
       const roles = getRolesFromPayload(introspection, ADMIN_CLIENT_ID);
       if (!introspection.active || !roles.includes(ADMIN_ROLE)) {
+        const logoutUrl = buildKeycloakLogoutUrl('/admin/login');
         res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end('<html><body><h2>Tài khoản không có quyền quản trị.</h2></body></html>');
+        res.end(`<html><body><h2>Tài khoản không có quyền quản trị.</h2>
+          <p><a href="${logoutUrl}">Đăng xuất tài khoản hiện tại và thử lại</a></p>
+          </body></html>`);
         return;
       }
 
@@ -442,11 +453,7 @@ http.createServer(async (req, res) => {
   if (req.method === 'POST' && p === '/admin/logout') {
     const cookies = parseCookies(req);
     if (cookies.admin_session) adminSessions.delete(cookies.admin_session);
-    const logoutParams = new URLSearchParams({
-      client_id: ADMIN_CLIENT_ID,
-      post_logout_redirect_uri: `http://${VM_HOST}/admin`,
-    });
-    const logoutUrl = `${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/logout?${logoutParams}`;
+    const logoutUrl = buildKeycloakLogoutUrl('/admin');
     res.writeHead(200, {
       'Set-Cookie': 'admin_session=; Max-Age=0; Path=/',
       'Content-Type': 'application/json',

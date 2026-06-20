@@ -79,3 +79,15 @@ thêm mới.
   sau đó nó vẫn shell-out gọi `cargo build` bằng toolchain **mặc định đang active lúc đó**
   (vẫn là 1.75.0, vì `rustup run stable` chỉ override cho đúng 1 lệnh `install`, không đổi
   default của job).
+
+- **2026-06-20 — Fix AppImage step: `tar: ./data.tar.xz: Cannot open: No such file or directory`.**
+  Lỗi nằm ở job **`build-linux`** (bước "Build AppImage"), không liên quan `build-macos` —
+  job macOS không build `.deb`/AppImage, chỉ ra `.dmg`. Nguyên nhân: `appimage/AppImageBuilder-
+  x86_64.yml` và `-aarch64.yml` hardcode `bsdtar -zxvf rustdesk.deb` rồi `tar -xvf
+  ./data.tar.xz`, nhưng lệnh đóng deb ở `build.py:634` (`dpkg-deb -b tmpdeb rustdesk.deb`) không
+  chỉ định `-Z<type>` nên dùng compression **mặc định** của `dpkg-deb` trên runner — mặc định
+  này đã đổi thành **zstd** (`control.tar.zst`/`data.tar.zst`) trên Ubuntu runner hiện tại, lệch
+  với phần mở rộng `.xz` mà recipe AppImageBuilder giả định cứng. → Pin compression về xz tại
+  đúng 1 điểm build deb đang dùng (`build.py:634`, nhánh Sciter Linux không-Flutter — 2 lệnh
+  `dpkg-deb -b` còn lại ở `build.py:360`/`397` là Flutter-only, ngoài scope):
+  `dpkg-deb -Zxz -b tmpdeb rustdesk.deb`. Không cần sửa các file recipe `AppImageBuilder-*.yml`.

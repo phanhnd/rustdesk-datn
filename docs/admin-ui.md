@@ -157,6 +157,21 @@ sequenceDiagram
 
 ## Change Log
 
+- **2026-06-20** — Fix trang lỗi "Tài khoản không có quyền quản trị"
+  (`/admin/auth/callback` role-check fail) là dead-end. Root cause: Keycloak SSO dùng
+  chung session giữa các client trong realm — nếu browser đang có session của user
+  không có role `admin` trên `rocky-admin`, bấm "Đăng nhập với Keycloak" sẽ không hiện
+  form login mà tự redirect thẳng tới callback với đúng user sai đó, lặp vô hạn lần.
+  Thêm helper `buildKeycloakLogoutUrl(postLogoutPath)` (cạnh `introspectToken`,
+  `server.js`) dùng chung cho `/admin/logout` (refactor, hành vi không đổi) và trang
+  403 mới: trang 403 giờ có link "Đăng xuất tài khoản hiện tại và thử lại" trỏ tới
+  Keycloak end-session với `post_logout_redirect_uri=/admin/login` — xoá session SSO
+  sai tài khoản rồi tự kích hoạt lại `/admin/login`, lần này Keycloak phải hiện form
+  username/password. Không đổi logic role-check, không ép `prompt=login`.
+  **Phụ thuộc cấu hình tay trên Keycloak (bắt buộc để fix có tác dụng):** client
+  `rocky-admin` → Settings → "Valid post logout redirect URIs" phải có cả
+  `http://localhost:3000/admin` và `http://localhost:3000/admin/login`, nếu không
+  Keycloak trả `400 Invalid redirect uri` cho cả nút "Đăng xuất" cũ lẫn link mới.
 - **2026-06-19** — Sau 1 lần tăng sáng navy vẫn bị phản hồi "còn tối", chuyển hẳn
   `:root` của `public/admin.html` sang **theme sáng** (nền trắng/xanh rất nhạt `#F7FAFF`,
   card trắng, chữ navy đậm `#16234F`, accent teal đậm `#00B8B8` thay vì navy/teal tối)
