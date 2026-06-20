@@ -509,6 +509,9 @@ def main():
             print('Not signed')
         system2(
             f'cp -rf target/release/RustDesk.exe {res_dir}')
+        if os.path.exists('sciter.dll'):
+            system2('cp -f sciter.dll target/release/sciter.dll')
+            system2(f'cp -f sciter.dll {res_dir}/sciter.dll')
         os.chdir('libs/portable')
         system2('pip3 install -r requirements.txt')
         system2(

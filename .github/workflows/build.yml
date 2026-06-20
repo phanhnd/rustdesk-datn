@@ -44,6 +44,10 @@ jobs:
         $VCPKG_ROOT/vcpkg install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"
       shell: bash
 
+    - name: Download sciter.dll
+      run: curl -LJ -o sciter.dll https://github.com/c-smile/sciter-sdk/raw/master/bin.win/x64/sciter.dll
+      shell: bash
+
     - name: Build RustDesk for Windows
       run: python build.py --portable
 
@@ -53,6 +57,7 @@ jobs:
         name: rustdesk-windows
         path: |
           target/release/RustDesk.exe
+          target/release/sciter.dll
           rustdesk-*-win7-install.exe
 
   # ============ BUILD CHO LINUX (Ubuntu) ============
