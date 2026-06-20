@@ -190,12 +190,7 @@
     <h1>ROCKY Admin</h1>
     <p class="tagline">Think Like Hustler.</p>
     <p>Đăng nhập để quản lý hệ thống</p>
-    <div class="err" id="login-err" style="display:none"></div>
-    <label>Tên đăng nhập</label>
-    <input id="inp-user" type="text" placeholder="admin" autocomplete="username">
-    <label>Mật khẩu</label>
-    <input id="inp-pass" type="password" placeholder="••••••••" autocomplete="current-password">
-    <button class="btn btn-primary" onclick="doLogin()">Đăng nhập</button>
+    <button class="btn btn-primary" onclick="location.href='/admin/login'">Đăng nhập với Keycloak</button>
   </div>
 </div>
 
@@ -287,39 +282,30 @@ let roleDetails = [];   // [{name, machine_ids, machines, users}]
 let allUsers    = [];   // [{id, username, firstName, lastName, email, roles}]
 
 // ── Auth ───────────────────────────────────────────────────────────────────
-async function doLogin() {
-  const username = document.getElementById('inp-user').value.trim();
-  const password = document.getElementById('inp-pass').value;
-  const errEl = document.getElementById('login-err');
-  errEl.style.display = 'none';
+async function checkSession() {
   try {
-    const r = await fetch('/admin/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    });
-    if (r.ok) {
+    const r = await fetch('/admin/session');
+    const data = await r.json();
+    if (data.authenticated) {
       document.getElementById('login-page').style.display = 'none';
       document.getElementById('app').style.display = 'flex';
-      document.getElementById('admin-label').textContent = username;
+      document.getElementById('admin-label').textContent = data.username;
       loadAll();
-    } else {
-      errEl.textContent = 'Sai tên đăng nhập hoặc mật khẩu.';
-      errEl.style.display = 'block';
     }
   } catch (e) {
-    errEl.textContent = 'Lỗi kết nối: ' + e.message;
-    errEl.style.display = 'block';
+    // giữ login-page nếu lỗi mạng
   }
 }
-
-document.getElementById('inp-pass').addEventListener('keydown', e => {
-  if (e.key === 'Enter') doLogin();
-});
+checkSession();
 
 async function doLogout() {
-  await fetch('/admin/logout', { method: 'POST' });
-  location.reload();
+  const r = await fetch('/admin/logout', { method: 'POST' });
+  const data = await r.json();
+  if (data.logoutUrl) {
+    location.href = data.logoutUrl;
+  } else {
+    location.reload();
+  }
 }
 
 // ── Tab switching ──────────────────────────────────────────────────────────

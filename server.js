@@ -6,16 +6,23 @@ const crypto = require('crypto');
 const querystring = require('querystring');
 const { DatabaseSync } = require('node:sqlite');
 
-const KEYCLOAK_URL  = 'http://192.168.1.16:8080';
+const VM_HOST       = 'localhost:3000';
+const KEYCLOAK_HOST = 'localhost:8080';
+const KEYCLOAK_URL  = `http://${KEYCLOAK_HOST}`;
 const REALM         = 'rustdesk';
 const CLIENT_ID     = 'rustdesk-client';
 const CLIENT_SECRET = 'wzZwDnLFW02kkOS3gyCdKWNErENBaEEN';
-const REDIRECT_URI  = 'http://192.168.1.16:3000/api/auth/callback';
+const REDIRECT_URI  = `http://${VM_HOST}/api/auth/callback`;
 
-// Admin credentials
-const ADMIN_USER = 'admin';
-const ADMIN_PASS = 'admin123';
-const adminSessions = new Set();
+// Admin web UI — Keycloak SSO login, role "admin" required, 2FA enforced
+// server-side via Keycloak Conditional OTP Form bound to this client's flow.
+const ADMIN_CLIENT_ID      = 'rocky-admin';
+const ADMIN_CLIENT_SECRET  = '272LGI6gmuvA7ppbMDDefHBoehhSvxEA';
+const ADMIN_REDIRECT_URI   = `http://${VM_HOST}/admin/auth/callback`;
+const ADMIN_ROLE           = 'admin';
+const ADMIN_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const adminSessions = new Map(); // session token -> { sub, username, roles, expiresAt }
+const adminLoginStates = new Map(); // CSRF state -> expiresAt, short-lived during redirect round-trip
 
 // Keycloak service account token cache
 let serviceToken = null;
@@ -260,16 +267,23 @@ function decodeJwtPayload(token) {
   }
 }
 
-function getRolesFromPayload(payload) {
+function getRolesFromPayload(payload, clientId = CLIENT_ID) {
   const roles = [];
   if (payload.realm_access && Array.isArray(payload.realm_access.roles)) {
     roles.push(...payload.realm_access.roles);
   }
-  if (payload.resource_access && payload.resource_access[CLIENT_ID]) {
-    const clientRoles = payload.resource_access[CLIENT_ID].roles;
+  if (payload.resource_access && payload.resource_access[clientId]) {
+    const clientRoles = payload.resource_access[clientId].roles;
     if (Array.isArray(clientRoles)) roles.push(...clientRoles);
   }
   return roles;
+}
+
+async function introspectToken(token, clientId, clientSecret) {
+  const body = querystring.stringify({ token, client_id: clientId, client_secret: clientSecret });
+  const introspectUrl = `${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/token/introspect`;
+  const result = await httpPost(introspectUrl, body);
+  return JSON.parse(result.body);
 }
 
 function parseCookies(req) {
@@ -284,7 +298,9 @@ function parseCookies(req) {
 
 function requireAdminAuth(req, res) {
   const cookies = parseCookies(req);
-  if (!cookies.admin_token || !adminSessions.has(cookies.admin_token)) {
+  const session = cookies.admin_session ? adminSessions.get(cookies.admin_session) : null;
+  if (!session || Date.now() > session.expiresAt) {
+    if (cookies.admin_session) adminSessions.delete(cookies.admin_session);
     res.writeHead(401, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Unauthorized' }));
     return false;
@@ -334,30 +350,108 @@ http.createServer(async (req, res) => {
     return;
   }
 
-  // ── Admin login / logout ──────────────────────────────────────────────────
-  if (req.method === 'POST' && p === '/admin/login') {
-    const raw = await readBody(req);
-    let creds = {};
-    try { creds = JSON.parse(raw); } catch (_) {}
-    if (creds.username === ADMIN_USER && creds.password === ADMIN_PASS) {
-      const token = crypto.randomBytes(24).toString('hex');
-      adminSessions.add(token);
-      res.writeHead(200, {
-        'Set-Cookie': `admin_token=${token}; HttpOnly; Path=/`,
-        'Content-Type': 'application/json',
-      });
-      res.end(JSON.stringify({ ok: true }));
-    } else {
-      jsonResponse(res, 401, { error: 'Invalid credentials' });
+  // ── Admin login / logout (Keycloak SSO, role "admin" required) ────────────
+  if (req.method === 'GET' && p === '/admin/login') {
+    const state = crypto.randomBytes(16).toString('hex');
+    adminLoginStates.set(state, Date.now() + 5 * 60 * 1000);
+    const params = new URLSearchParams({
+      client_id: ADMIN_CLIENT_ID,
+      redirect_uri: ADMIN_REDIRECT_URI,
+      response_type: 'code',
+      scope: 'openid',
+      state,
+    });
+    res.writeHead(302, { 'Location': `${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/auth?${params}` });
+    res.end();
+    return;
+  }
+
+  if (req.method === 'GET' && p === '/admin/auth/callback') {
+    const { code, state } = parsed.query;
+    const stateExpiry = state ? adminLoginStates.get(state) : null;
+    console.log('[admin/auth/callback DEBUG]', {
+      receivedState: state,
+      knownStates: [...adminLoginStates.keys()],
+      stateExpiry,
+      now: Date.now(),
+      hasCode: !!code,
+    });
+    if (state) adminLoginStates.delete(state);
+    if (!code || !state || !stateExpiry || Date.now() > stateExpiry) {
+      res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<html><body><h2>Đăng nhập thất bại: state không hợp lệ hoặc đã hết hạn.</h2></body></html>');
+      return;
     }
+    try {
+      const tokenBody = querystring.stringify({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: ADMIN_REDIRECT_URI,
+        client_id: ADMIN_CLIENT_ID,
+        client_secret: ADMIN_CLIENT_SECRET,
+      });
+      const tokenUrl = `${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/token`;
+      const tokenResult = await httpPost(tokenUrl, tokenBody);
+      const tokenData = JSON.parse(tokenResult.body);
+      console.log('[admin/auth/callback DEBUG] token exchange', { status: tokenResult.status, body: tokenResult.body });
+      if (!tokenData.access_token) {
+        res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end('<html><body><h2>Đăng nhập thất bại.</h2></body></html>');
+        return;
+      }
+
+      const introspection = await introspectToken(tokenData.access_token, ADMIN_CLIENT_ID, ADMIN_CLIENT_SECRET);
+      const roles = getRolesFromPayload(introspection, ADMIN_CLIENT_ID);
+      if (!introspection.active || !roles.includes(ADMIN_ROLE)) {
+        res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end('<html><body><h2>Tài khoản không có quyền quản trị.</h2></body></html>');
+        return;
+      }
+
+      const sessionToken = crypto.randomBytes(24).toString('hex');
+      adminSessions.set(sessionToken, {
+        sub: introspection.sub,
+        username: introspection.preferred_username || introspection.username || '',
+        roles,
+        expiresAt: Date.now() + ADMIN_SESSION_TTL_MS,
+      });
+      res.writeHead(302, {
+        'Set-Cookie': `admin_session=${sessionToken}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(ADMIN_SESSION_TTL_MS / 1000)}`,
+        'Location': '/admin',
+      });
+      res.end();
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<html><body><h2>Lỗi đăng nhập: ' + err.message + '</h2></body></html>');
+    }
+    return;
+  }
+
+  if (req.method === 'GET' && p === '/admin/session') {
+    const cookies = parseCookies(req);
+    const session = cookies.admin_session ? adminSessions.get(cookies.admin_session) : null;
+    if (!session || Date.now() > session.expiresAt) {
+      if (cookies.admin_session) adminSessions.delete(cookies.admin_session);
+      jsonResponse(res, 200, { authenticated: false });
+      return;
+    }
+    jsonResponse(res, 200, { authenticated: true, username: session.username, roles: session.roles });
     return;
   }
 
   if (req.method === 'POST' && p === '/admin/logout') {
     const cookies = parseCookies(req);
-    if (cookies.admin_token) adminSessions.delete(cookies.admin_token);
-    res.writeHead(200, { 'Set-Cookie': 'admin_token=; Max-Age=0; Path=/', 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true }));
+    if (cookies.admin_session) adminSessions.delete(cookies.admin_session);
+    const logoutParams = new URLSearchParams({
+      client_id: ADMIN_CLIENT_ID,
+      post_logout_redirect_uri: `http://${VM_HOST}/admin`,
+    });
+    const logoutUrl = `${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/logout?${logoutParams}`;
+    res.writeHead(200, {
+      'Set-Cookie': 'admin_session=; Max-Age=0; Path=/',
+      'Content-Type': 'application/json',
+    });
+    res.end(JSON.stringify({ ok: true, logoutUrl }));
     return;
   }
 
@@ -767,6 +861,6 @@ http.createServer(async (req, res) => {
 
   res.writeHead(404); res.end('Not found');
 }).listen(3000, '0.0.0.0', () => {
-  console.log('Gateway running at http://192.168.1.16:3000');
-  console.log('Admin UI:         http://192.168.1.16:3000/admin');
+  console.log(`Gateway running at http://${VM_HOST}`);
+  console.log(`Admin UI:         http://${VM_HOST}/admin`);
 });

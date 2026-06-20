@@ -55,6 +55,73 @@ Các quyết định đã chốt với user:
    lại Keycloak mỗi request (đơn giản, giảm round-trip, phù hợp quy mô admin
    panel nội bộ).
 
+## Sequence Diagram — Login Admin (trước khi triển khai)
+
+```mermaid
+sequenceDiagram
+    actor Admin as Admin (Browser)
+    participant Web as Admin Web UI (server.js)
+    participant KC as Keycloak (realm rustdesk)
+
+    Admin->>Web: GET /admin
+    Web-->>Admin: admin.html
+    Admin->>Web: GET /admin/session
+    Web-->>Admin: { authenticated: false }
+    Admin->>Web: Click "Đăng nhập với Keycloak"
+    Admin->>Web: GET /admin/login
+    Web->>Web: sinh state (CSRF), lưu tạm
+    Web-->>Admin: 302 Redirect tới Keycloak /auth?client_id=rocky-admin&redirect_uri=.../admin/auth/callback&state=...
+
+    Admin->>KC: GET /realms/rustdesk/protocol/openid-connect/auth?...
+    KC-->>Admin: Trang login Keycloak (user/pass)
+    Admin->>KC: Nhập username/password
+    KC->>KC: Xác thực user/pass đúng
+    KC->>KC: Check Conditional OTP Form (role = admin?)
+
+    alt Có role admin & CHƯA có OTP credential
+        KC-->>Admin: Hiện QR code đăng ký OTP
+        Admin->>Admin: Mở app authenticator, quét QR
+        Admin->>KC: Nhập mã 6 số để xác nhận đăng ký
+        KC->>KC: Lưu secret_key cho user
+    else Có role admin & ĐÃ có OTP credential
+        KC-->>Admin: Hiện form nhập mã OTP
+        Admin->>KC: Nhập mã 6 số hiện tại trên app
+        KC->>KC: Verify TOTP(secret_key, time) == mã nhập
+    end
+
+    KC-->>Admin: 302 Redirect /admin/auth/callback?code=...&state=...
+    Admin->>Web: GET /admin/auth/callback?code=...&state=...
+    Web->>Web: Kiểm tra state khớp (chống CSRF)
+    Web->>KC: POST /protocol/openid-connect/token (exchange code, client_id=rocky-admin + secret)
+    KC-->>Web: access_token
+
+    Web->>KC: POST /protocol/openid-connect/token/introspect (token, client_id=rocky-admin + secret)
+    KC-->>Web: { active: true, resource_access, preferred_username, sub }
+
+    alt role "admin" CÓ trong resource_access['rocky-admin'].roles
+        Web->>Web: Tạo session trong Map, expiresAt = now + 8h
+        Web-->>Admin: Set-Cookie admin_session=...; 302 Redirect /admin
+        Admin->>Web: GET /admin (kèm cookie)
+        Web-->>Admin: admin.html
+        Admin->>Web: GET /admin/session
+        Web-->>Admin: { authenticated: true, username, roles }
+        Web-->>Admin: Hiện app shell (Users/Roles/Machines)
+    else role "admin" KHÔNG có
+        Web-->>Admin: 403 "Tài khoản không có quyền quản trị" (không tạo session)
+    end
+```
+
+Ghi chú đọc sơ đồ:
+- Đoạn `alt` đầu (đăng ký OTP lần đầu / nhập OTP đã có) hoàn toàn do Keycloak tự
+  render và xử lý ngay trên trang login của nó — `server.js` không tham gia,
+  không biết và không cần biết chuyện OTP đã xảy ra ở giữa.
+- Đoạn `alt` thứ hai (role admin có/không) là logic duy nhất `server.js` phải
+  tự code (bước 5 trong "Thay đổi trong `server.js`" dưới đây).
+- Nếu user gõ sai username/password hoặc sai OTP, Keycloak giữ user lại ở
+  trang login của nó và không bao giờ phát `code` — `server.js` không thấy
+  request nào trong các trường hợp thất bại đó (không cần xử lý lỗi cho case
+  này).
+
 ## Phần cấu hình Keycloak (thực hiện trên Keycloak admin console, ngoài code)
 
 - Tạo client `rocky-admin`: Access Type = confidential, Standard Flow Enabled,
@@ -73,8 +140,10 @@ tiền điều kiện để code hoạt động đúng.
 ## Thay đổi trong `server.js`
 
 0. **Refactor `VM_HOST`** (dòng 9-13 hiện tại): thêm
-   `const VM_HOST = '192.168.1.16:3000';` (hoặc tách riêng IP/port nếu cần),
-   `const KEYCLOAK_HOST = '192.168.1.16:8080';` rồi suy ra:
+   `const VM_HOST = 'localhost:3000';` (**tạm dùng localhost để test cục bộ**,
+   sẽ đổi lại thành `192.168.1.16:3000` khi deploy lên VM — chỉ cần sửa giá trị
+   này, không cần sửa logic), `const KEYCLOAK_HOST = '192.168.1.16:8080';` rồi
+   suy ra:
    `KEYCLOAK_URL = http://${KEYCLOAK_HOST}`, `REDIRECT_URI = http://${VM_HOST}/api/auth/callback`,
    `ADMIN_REDIRECT_URI = http://${VM_HOST}/admin/auth/callback`. Khi đổi IP/mạng
    sau này chỉ cần sửa `VM_HOST`/`KEYCLOAK_HOST` (2 dòng, do Keycloak và gateway
@@ -209,4 +278,94 @@ tiền điều kiện để code hoạt động đúng.
 
 ## Tiến độ / Changelog
 
-_(chưa có mục nào — sẽ cập nhật sau mỗi bước triển khai)_
+### 2026-06-20 — Cấu hình Keycloak (HOÀN TẤT cả 5 bước)
+
+Trạng thái theo checklist "Hướng dẫn cấu hình Keycloak":
+
+- [x] Bước 1 — Tạo client `rocky-admin` (confidential), có `client_secret` —
+      XÁC NHẬN XONG.
+- [x] Bước 2 — Tạo role `admin` trên client `rocky-admin` — XÁC NHẬN XONG.
+- [x] Bước 3 — Gán role `admin` cho 1 user test — XÁC NHẬN XONG.
+- [x] **Bước 4 — Tạo authentication flow `browser-admin-otp` — XONG
+      (2026-06-20).** Duplicate `Browser` flow, Keycloak tự sinh sẵn nhánh
+      Conditional 2FA; đã xoá điều kiện mặc định `Condition - user configured`
+      (sai ngữ nghĩa — chỉ bắt OTP nếu user đã từng cấu hình trước, user admin
+      mới sẽ không bao giờ bị bắt OTP) và thay bằng `Condition - user role` =
+      `rocky-admin.admin` (Required), `OTP Form` đổi `Alternative` → `Required`.
+      Cây cuối cùng:
+      ```
+      browser-admin-otp forms (Alternative)
+      ├─ Username Password Form (Required)
+      └─ browser-admin-otp Browser - Conditional 2FA (Conditional)
+         ├─ Condition - user role (Required) → role = rocky-admin.admin
+         ├─ OTP Form (Required)
+         ├─ WebAuthn Authenticator (Disabled)
+         └─ Recovery Authentication Code Form (Disabled)
+      ```
+- [ ] Bước 5 — Gán flow `browser-admin-otp` làm Browser Flow override cho
+      client `rocky-admin` (client `rustdesk-client` giữ flow gốc) — ĐANG LÀM.
+
+Cả 5 bước cấu hình Keycloak đã xong, đủ điều kiện để bắt đầu code. Tiếp theo:
+sang mục "Thay đổi trong `server.js`" ở trên — sẽ chép tiến độ code vào đây
+sau khi xong.
+
+### 2026-06-20 — Code `server.js` + `public/admin.html` đã viết xong
+
+Đối chiếu working tree với checklist "Thay đổi trong `server.js`" / "Thay đổi
+trong `public/admin.html`" ở trên: cả 2 file đã được sửa khớp toàn bộ các mục
+0–7 (VM_HOST refactor, `ADMIN_CLIENT_ID`/`ADMIN_SESSION_TTL_MS`, Map
+`adminSessions`, `adminLoginStates` cho CSRF state, `introspectToken()`,
+route `GET /admin/login`, `GET /admin/auth/callback`, `GET /admin/session`,
+`POST /admin/logout` trả `logoutUrl`, `requireAdminAuth()` đọc cookie
+`admin_session`) và admin.html (xoá form user/pass, nút "Đăng nhập với
+Keycloak", `checkSession()`, `doLogout()` redirect theo `logoutUrl`). Chưa
+chạy `git commit` — vẫn là working tree changes.
+
+### 2026-06-20 — Kiểm thử thủ công qua curl: phát hiện bug ở logout
+
+Test thực hiện (server đang chạy `node server.js`, Keycloak tại
+`localhost:8080`):
+
+- `GET /admin/session` (chưa đăng nhập) → `{"authenticated":false}` ✅
+- `GET /admin/login` → `302` redirect đúng tới Keycloak `/auth` với
+  `client_id=rocky-admin`, `redirect_uri=http://localhost:3000/admin/auth/callback`,
+  `state=<random>` ✅
+- Theo redirect tới Keycloak → nhận được trang login thật (form action có
+  `session_code`/`execution` hợp lệ) → xác nhận client `rocky-admin` + flow
+  đã cấu hình đúng, Keycloak chấp nhận `redirect_uri=localhost` ✅ (chưa test
+  tiếp phần nhập user/pass/OTP thật vì không có credentials user test trong
+  tay — cần user tự test hoặc cung cấp creds ở lượt sau)
+- `POST /admin/logout` (có/không có cookie `admin_session`) → `200`, xoá
+  cookie (`Max-Age=0`), trả `logoutUrl` đúng cấu trúc Keycloak end-session
+  endpoint ✅ (logic server-side đúng theo thiết kế)
+- **Bug:** gọi thẳng `logoutUrl` đó tới Keycloak → **`400 Invalid redirect
+  uri`**. Tra config thật của client `rocky-admin` qua Keycloak Admin API
+  (service account `rustdesk-client`) thấy:
+  ```json
+  { "clientId": "rocky-admin",
+    "redirectUris": ["http://localhost:3000/admin/auth/callback"],
+    "attributes": {} }
+  ```
+  Trường **"Valid post logout redirect URIs"** chưa được set (rỗng) nên
+  Keycloak từ chối mọi `post_logout_redirect_uri`, kể cả
+  `http://localhost:3000/admin` mà `server.js` (route `/admin/logout`) đang
+  gửi. Hậu quả: bấm "Đăng xuất" trên `admin.html` → cookie local bị xoá đúng,
+  nhưng browser bị redirect sang trang lỗi Keycloak thay vì logout sạch —
+  **session SSO trên Keycloak không bị kết thúc**, không đạt được yêu cầu
+  "global SSO logout" đã chốt ở quyết định #3 đầu plan này.
+
+**Cách sửa (thao tác tay trên Keycloak Admin Console, ngoài phạm vi code):**
+client `rocky-admin` → Settings → "Valid post logout redirect URIs" → thêm
+`http://localhost:3000/admin` (và `http://192.168.1.16:3000/admin` khi deploy
+lên VM, theo đúng tinh thần `VM_HOST` ở mục 0).
+
+**Việc còn lại trước khi coi flow login/logout là PASS đầy đủ:**
+- [ ] Sửa "Valid post logout redirect URIs" trên Keycloak rồi test lại
+      `POST /admin/logout` → theo `logoutUrl` → xác nhận Keycloak logout
+      thành công và redirect ngược về `/admin`.
+- [ ] Test login thật bằng user có role `admin` trên `rocky-admin` (cần
+      username/password — chưa có trong tay ở lượt test này), bao gồm cả
+      bước OTP lần đầu (mục 3 trong "Kiểm thử" ở trên).
+- [ ] Test user KHÔNG có role `admin` bị chặn (mục 4 trong "Kiểm thử").
+- [ ] Test SSO bỏ qua nhập lại password khi đã có session Keycloak từ trước
+      (mục 5 trong "Kiểm thử").
