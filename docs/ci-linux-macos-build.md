@@ -44,7 +44,8 @@ thêm mới.
    và đóng gói `.dmg`.
 3. Setup vcpkg + `vcpkg install` (không cần `--triplet`, `libs/scrap/build.rs` tự suy ra
    `x64-osx`/`arm64-osx` theo kiến trúc runner).
-4. `cargo install cargo-bundle`, tải `libsciter.dylib`.
+4. Cài `cargo-bundle` bằng toolchain `stable` riêng (`rustup run stable cargo install ...`,
+   xem Change Log), tải `libsciter.dylib`.
 5. `python3 build.py` — nhánh macOS không-Flutter của `build.py` (đã có sẵn, không sửa):
    `cargo bundle` → `target/release/bundle/osx/RustDesk.app`, copy `libsciter.dylib` vào
    `Contents/MacOS/`, `create-dmg` ra `rustdesk-{version}.dmg`. Không ký code (biến môi trường
@@ -66,3 +67,15 @@ thêm mới.
   - `build-macos` job hoàn toàn mới — upstream RustDesk **không có CI job build Sciter cho
     macOS** (chỉ có Flutter macOS, xem `build-for-macOS` trong `flutter-build.yml`), nên job
     này được viết dựa trên nhánh `build.py` osx không-Flutter sẵn có (chưa từng chạy qua CI).
+
+- **2026-06-20 — Fix `cargo install cargo-bundle`: lỗi `feature edition2024 is required`.**
+  `cargo install` chạy bằng cargo của toolchain **1.75.0** (pin cho Sciter ABI). Bản mới nhất
+  của `cargo-bundle` trên crates.io (0.11.0) khai báo `edition = "2024"` trong `Cargo.toml` —
+  cargo 1.75 không parse được edition này (cần cargo ≥1.85, ổn định ở Rust 1.85). Lỗi xảy ra ở
+  cả `build-linux` và `build-macos` vì cả hai đều pin `1.75.0` làm toolchain mặc định. → Cài
+  thêm toolchain `stable` riêng (`rustup toolchain install stable --profile minimal`) chỉ để
+  build/install binary `cargo-bundle` (`rustup run stable cargo install cargo-bundle --locked`);
+  binary này không phụ thuộc ABI Sciter — nó chỉ là tool đóng gói, khi chạy `cargo bundle ...`
+  sau đó nó vẫn shell-out gọi `cargo build` bằng toolchain **mặc định đang active lúc đó**
+  (vẫn là 1.75.0, vì `rustup run stable` chỉ override cho đúng 1 lệnh `install`, không đổi
+  default của job).

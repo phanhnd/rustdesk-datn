@@ -30,10 +30,30 @@ Các quyết định đã chốt với user:
    `/admin/auth/callback`) — không tái dùng `rustdesk-client`, để tách biệt role
    và policy 2FA khỏi client ROCKY desktop, vẫn SSO chung vì cùng realm
    `rustdesk`.
-2. **2FA (Conditional OTP) chỉ áp dụng cho role admin** — cấu hình ở Keycloak
-   Authentication Flow, không ảnh hưởng login thường của ROCKY desktop.
+2. **2FA = TOTP qua app authenticator** (Google Authenticator/Authy/Keycloak
+   app), built-in Keycloak core, không cần SMTP/SMS gateway. Áp dụng qua
+   **Conditional OTP Form chỉ khi user có role admin** — không ảnh hưởng login
+   thường của ROCKY desktop (client `rustdesk-client` dùng flow gốc, không đổi).
 3. **Logout = global SSO logout** — gọi Keycloak end-session endpoint để kết
    thúc session SSO trong browser, không chỉ xoá session local.
+4. **Gom URL phụ thuộc IP VM về 1 constant `VM_HOST`** — `KEYCLOAK_URL`,
+   `REDIRECT_URI`, `ADMIN_REDIRECT_URI` đều suy ra từ `VM_HOST` duy nhất, để mỗi
+   lần đổi IP/mạng chỉ cần sửa 1 dòng trong `server.js` (hiện đang phải sửa rời
+   rạc nhiều hằng số, dễ quên — xem ghi chú trong `CLAUDE.md` mục "Web Admin
+   UI").
+5. **Session admin TTL cố định 8 giờ kể từ lúc login**, không phụ thuộc vào
+   thời gian sống ngắn của access_token Keycloak (vì sau khi login xong,
+   backend không cần dùng lại access_token của user — mọi gọi Keycloak Admin
+   API đã dùng service account riêng qua `getServiceToken()`). Hết 8 giờ phải
+   đăng nhập + OTP lại, không tự refresh ngầm.
+6. **Role gate dùng client role `admin` gắn trên client `rocky-admin`** (không
+   dùng realm role) — phạm vi rõ ràng, không lẫn với role nào khác trong
+   realm `rustdesk`.
+7. **Token introspection chỉ gọi 1 lần lúc đổi code → token** (tại
+   `/admin/auth/callback`), kết quả (roles, username, sub) được cache trong
+   session Map server-side; các request sau chỉ kiểm tra Map + TTL, không gọi
+   lại Keycloak mỗi request (đơn giản, giảm round-trip, phù hợp quy mô admin
+   panel nội bộ).
 
 ## Phần cấu hình Keycloak (thực hiện trên Keycloak admin console, ngoài code)
 
@@ -52,14 +72,24 @@ tiền điều kiện để code hoạt động đúng.
 
 ## Thay đổi trong `server.js`
 
-1. **Hằng số cấu hình mới** (cạnh `KEYCLOAK_URL`/`REALM` hiện có ở dòng 9-13):
-   `ADMIN_CLIENT_ID = 'rocky-admin'`, `ADMIN_CLIENT_SECRET`,
-   `ADMIN_REDIRECT_URI = '.../admin/auth/callback'`, `ADMIN_ROLE = 'admin'`.
+0. **Refactor `VM_HOST`** (dòng 9-13 hiện tại): thêm
+   `const VM_HOST = '192.168.1.16:3000';` (hoặc tách riêng IP/port nếu cần),
+   `const KEYCLOAK_HOST = '192.168.1.16:8080';` rồi suy ra:
+   `KEYCLOAK_URL = http://${KEYCLOAK_HOST}`, `REDIRECT_URI = http://${VM_HOST}/api/auth/callback`,
+   `ADMIN_REDIRECT_URI = http://${VM_HOST}/admin/auth/callback`. Khi đổi IP/mạng
+   sau này chỉ cần sửa `VM_HOST`/`KEYCLOAK_HOST` (2 dòng, do Keycloak và gateway
+   có thể nằm trên port/host khác nhau dù cùng VM).
+
+1. **Hằng số cấu hình mới**: `ADMIN_CLIENT_ID = 'rocky-admin'`,
+   `ADMIN_CLIENT_SECRET`, `ADMIN_ROLE = 'admin'` (client role trên
+   `rocky-admin`), `ADMIN_SESSION_TTL_MS = 8 * 60 * 60 * 1000`.
    Xoá `ADMIN_USER`, `ADMIN_PASS`, `adminSessions` Set (dòng 16-18).
 
 2. **Session store mới**: thay `Set` bằng `Map adminSessions` lưu
-   `{ sub, username, roles, idToken, accessToken, expiresAt }` keyed theo
-   session token random (giữ pattern `crypto.randomBytes`).
+   `{ sub, username, roles, expiresAt }` (không cần giữ accessToken/idToken vì
+   không dùng lại sau bước introspect ban đầu — bước 3 dưới) keyed theo session
+   token random (giữ pattern `crypto.randomBytes`). `expiresAt = Date.now() +
+   ADMIN_SESSION_TTL_MS`, độc lập với thời gian sống của access_token.
 
 3. **Verify token sau khi đổi code → token**: thay vì chỉ
    `decodeJwtPayload()` (không verify signature — rủi ro đã biết, chấp nhận

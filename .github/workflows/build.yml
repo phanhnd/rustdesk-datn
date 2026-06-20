@@ -128,8 +128,14 @@ jobs:
         $VCPKG_ROOT/vcpkg install --triplet x64-linux --x-install-root="$VCPKG_ROOT/installed"
       shell: bash
 
+    # cargo-bundle's own Cargo.toml requires edition2024 (cargo >=1.85), which the
+    # 1.75.0 toolchain pinned above (for Sciter ABI compat) cannot parse. Build/install
+    # it with a separate, newer toolchain - the resulting binary still invokes whatever
+    # `cargo` is the active default (1.75.0) when it shells out to compile RustDesk.
     - name: Install cargo-bundle
-      run: cargo install cargo-bundle --locked
+      run: |
+        rustup toolchain install stable --profile minimal
+        rustup run stable cargo install cargo-bundle --locked
 
     - name: Download libsciter-gtk.so
       run: curl -LJ -o libsciter-gtk.so https://github.com/c-smile/sciter-sdk/raw/master/bin.lnx/x64/libsciter-gtk.so
@@ -192,8 +198,11 @@ jobs:
     - name: Install dependencies via vcpkg
       run: $VCPKG_ROOT/vcpkg install --x-install-root="$VCPKG_ROOT/installed"
 
+    # See the build-linux job for why this needs a separate, newer toolchain.
     - name: Install cargo-bundle
-      run: cargo install cargo-bundle --locked
+      run: |
+        rustup toolchain install stable --profile minimal
+        rustup run stable cargo install cargo-bundle --locked
 
     - name: Download libsciter.dylib
       run: curl -LJ -o libsciter.dylib https://github.com/c-smile/sciter-sdk/raw/master/bin.osx/libsciter.dylib
