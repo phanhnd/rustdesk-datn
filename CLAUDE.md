@@ -288,6 +288,23 @@ block `html { ... }` của `common.css` và đọc bằng `color(name)`.
   `src/ui/index.css`) tại đúng vị trí cũ trong `.left-pane`. Cảnh báo Wayland không còn
   hiển thị cho user nữa (đánh đổi đã được user xác nhận). `FixWayland` (cảnh báo Wayland
   khác, dòng `index.tis:742`) vẫn giữ nguyên, không liên quan thay đổi này.
+- **Dọn màu hồng sót lại từ lần đổi theme trước (2026-06-21).** Một số nơi hardcode hex
+  màu trực tiếp trong `.tis` (không qua CSS variable) vẫn còn giá trị hồng cũ
+  (`#f06292`/`#e91e63`) chưa từng được cập nhật theo theme navy/teal — đã sửa về palette
+  hiện hành:
+  - `src/ui/msgbox.tis` — màu accent msgbox loại login (`input-password`, `session-login`,
+    ...) → `#00D2D3` (accent); màu mặc định các msgbox còn lại → `#58D0F8` (button).
+  - `src/ui/header.tis` — fill icon "recording on" (`svg_recording_on`) → `#58D0F8`.
+  - `src/ui/file_transfer.tis` — fill icon máy tính (`svg_computer`) → `#58D0F8`.
+  - `src/ui/ab.tis` — màu spinner loading address book (2 chỗ) → `#00D2D3`.
+  - `src/ui/index.tis` — nền banner copyright trong popup "About" → đổi từ màu đặc
+    `#f06292` sang `linear-gradient(left,#111D43,#00D2D3)` (khớp gradient banner
+    `.install-me/.trust-me` ở `index.css:345`) vì màu `button` (#58D0F8) quá nhạt để làm
+    nền chữ trắng.
+  - Sciter KHÔNG cho dùng `color(name)` bên trong chuỗi JS (`.tis`) hay thuộc tính SVG
+    inline — chỉ dùng được trong rule CSS thật, nên các vị trí trên dùng hex literal,
+    không phải `color()`.
+  - Plan chi tiết: `.claude/plans/dong-bo-mau-theme-navy-teal.md`.
 
 > **Admin UI dùng theme riêng, KHÁC với bảng trên.** `public/admin.html` không theme
 > nền navy đậm — sau phản hồi "quá tối" đã đổi thành theme sáng (nền trắng `#F7FAFF`,
@@ -319,40 +336,59 @@ node server.js
 
 ### Kiến trúc
 - **`server.js`** — Node.js gateway, dùng built-ins (`http`, `fs`, `crypto`, `node:sqlite`), không có npm dependencies
-- **`public/admin.html`** — Single-page HTML thuần, **3 tab**: Người dùng / Danh sách role / Danh sách máy
+- **`public/admin.html`** — Single-page HTML thuần, **3 tab**: Người dùng / Danh sách group / Danh sách máy
 - **`data/rocky.db`** (tự sinh, SQLite qua `node:sqlite`) — Persistence chính. `data.json` (file cũ) chỉ được đọc **một lần** để migrate dữ liệu lịch sử sang DB nếu bảng `machines` còn rỗng; sau đó không còn được dùng.
+
+### Phân quyền Admin UI (3 tier trên client Keycloak `rocky-admin`)
+- `admin` — **admin tối cao**: full quyền + duy nhất tạo/xoá Keycloak Group + duy nhất gán/gỡ 3 role admin-tier này cho user khác (`/admin/api/users/:id/admin-roles`).
+- `manage_users` — quản trị danh sách người dùng (CRUD Keycloak user) + gán user vào Group (machine-access).
+- `manage_machines` — quản trị danh sách máy trạm (CRUD machine) + gán máy ↔ Group.
+- `requireAdminAuth(req, res, allowedRoles)` (`server.js`) gate theo tier ở **từng route**; `admin` luôn bypass mọi tier-check. `requireSuperAdmin(req, res)` riêng cho route chỉ admin tối cao.
+- Login `/admin/auth/callback` cho qua nếu có **ít nhất 1** trong 3 role trên (không chỉ riêng `admin`).
+- Chi tiết sequence diagram xem `docs/admin-ui.md`.
+
+### Phân quyền Rocky client (Address Book) — theo Keycloak Group, không còn theo role
+- User thuộc 1 hoặc nhiều **Keycloak Group** (realm-level, không phải client role); mỗi Group ánh xạ tới 1 danh sách máy.
+- Gateway đọc group của user qua claim **`groups`** trong JWT (cần protocol mapper "Group Membership" gắn vào `rustdesk-client`, xem `docs/address-book.md`) — không gọi thêm Keycloak Admin API mỗi request.
+- `/api/address-books` và `/api/check-access` dùng `getGroupsFromPayload()` + `getMachinesForGroups()` thay cho `getRolesFromPayload()`/`getMachinesForRoles()` cũ.
 
 ### Data model (SQLite — `data/rocky.db`)
 ```sql
 CREATE TABLE machines (
   id TEXT PRIMARY KEY, alias TEXT, rustdesk_id TEXT, note TEXT
 );
-CREATE TABLE machine_roles (
-  role_name TEXT, machine_id TEXT, PRIMARY KEY (role_name, machine_id)
+CREATE TABLE machine_groups (
+  group_name TEXT, machine_id TEXT, PRIMARY KEY (group_name, machine_id)
 );
 ```
 - Không còn trường `tag` (đã bỏ khỏi quản lý máy trạm — xem `docs/admin-ui.md`).
 - `machines.rustdesk_id` — ID thật dùng để kết nối từ RustDesk client (`ab.tis`)
-- `machine_roles` — quan hệ N–N giữa role (Keycloak client role) và machine; thay cho `roles[name]: [machineId,...]` của `data.json` cũ
-- Chi tiết các hàm truy cập DB (`getAllMachines`, `setMachineRoles`, `getMachinesForRoles`, ...) xem `docs/admin-ui.md`
+- `machine_groups` — quan hệ N–N giữa **Keycloak Group** (không phải role nữa) và machine; thay hẳn cho `machine_roles` cũ, không giữ song song.
+- Chi tiết các hàm truy cập DB (`getAllMachines`, `setMachineGroups`, `getMachinesForGroups`, ...) xem `docs/admin-ui.md`
 
 ### Keycloak Service Account (đã config)
 Client `rustdesk-client` đã bật **Service accounts roles** với quyền từ `realm-management`:
-- `view-users`, `manage-users`, `view-realm`
-- **Cần thêm** `manage-realm` để tạo/xoá KC role
+- `view-users`, `manage-users`, `view-realm`, **`query-groups`** (cần để list/search Keycloak Group)
+- `manage-users` đã cấp đủ quyền group CRUD + group-membership; nếu vẫn 403 khi tạo group, fallback thêm `manage-realm`
+
+Client `rustdesk-client` cần thêm **protocol mapper "Group Membership"** (Client scopes → dedicated scope → Mappers): Token Claim Name `groups`, Full group path **OFF**, Add to access token **ON** — xem `docs/address-book.md`.
+
+Client `rocky-admin` cần 3 client role: `admin` (đã có), `manage_users`, `manage_machines` (mới) — xem `docs/admin-ui.md`.
 
 ### Admin API endpoints
 | Nhóm | Endpoints |
 |---|---|
 | Auth | `POST /admin/login`, `POST /admin/logout` |
-| Users | `GET/POST /admin/api/users`, `DELETE /admin/api/users/:id`, `PUT /admin/api/users/:id/enabled` |
-| User roles | `POST/DELETE /admin/api/users/:id/roles` |
-| KC roles | `GET/POST /admin/api/keycloak-roles`, `DELETE /admin/api/keycloak-roles/:name` |
-| Roles (enriched) | `GET /admin/api/roles` → `[{name, machine_ids, machines, users}]` |
-| Role mapping | `PUT /admin/api/roles` → `{ roleName: [machineIds] }` |
-| Machines | `GET/POST /admin/api/machines`, `PUT/DELETE /admin/api/machines/:id` |
+| Users | `GET/POST /admin/api/users` (tier `manage_users`), `DELETE /admin/api/users/:id`, `PUT /admin/api/users/:id/enabled` |
+| User ↔ Group (machine-access) | `POST/DELETE /admin/api/users/:id/groups` (tier `manage_users`) |
+| User ↔ admin-tier role | `POST/DELETE /admin/api/users/:id/admin-roles` (chỉ admin tối cao) |
+| Groups (enriched) | `GET /admin/api/groups` → `{groups:[{id,name,machine_ids,machines,users}], kcError}` (tier `manage_users`/`manage_machines`) |
+| Group CRUD | `POST /admin/api/groups` (chỉ admin tối cao), `DELETE /admin/api/groups/:id` (chỉ admin tối cao) |
+| Group ↔ máy mapping | `PUT /admin/api/groups` → `{ groupName: [machineIds] }` (tier `manage_machines`) |
+| Machines | `GET/POST /admin/api/machines`, `PUT/DELETE /admin/api/machines/:id` (tier `manage_machines`) |
 | Client auth | `POST /api/auth/init`, `GET /api/auth/callback`, `POST /api/auth/status`, `POST /api/auth/logout` |
-| Address books | `POST /api/address-books` → `{ machines: [...] }` |
+| Address books | `POST /api/address-books` → `{ machines: [{..., groups:[...]}] }` |
+| Check access | `POST /api/check-access` → `{ allowed, reason? }` (theo Group, không còn theo role) |
 
 ---
 

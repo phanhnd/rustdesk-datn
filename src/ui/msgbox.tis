@@ -117,7 +117,7 @@ class MsgboxComponent: Reactor.Component {
 
     function getColor() {
         if (this.type == "input-password" || this.type == "input-2fa" || this.type == "custom-os-password" || this.type == "session-login" || this.type == "session-login-password") {
-            return "#e91e63";
+            return "#00D2D3";
         }
         if (this.type == "success") {
             return "#32bea6";
@@ -125,7 +125,7 @@ class MsgboxComponent: Reactor.Component {
         if (this.type.indexOf("error") >= 0 || this.type == "re-input-password" || this.type == "session-re-login" || this.type == "session-login-re-password") {
             return "#e04f5f";
         }
-        return "#f06292";
+        return "#58D0F8";
     }
 
     function hasSkip() {

@@ -53,6 +53,19 @@ client (`src/ui/ab.tis`).
 `docs/admin-ui.md` (Change Log) ghi nhận helper mới + recovery link + phụ thuộc cấu
 hình Keycloak bên dưới.
 
+### 2026-06-20 (tiếp) — Bị thay thế bởi plan redesign rộng hơn
+
+Sau khi triển khai xong bandaid này, user phản hồi luồng login vẫn "không ổn cả" và
+yêu cầu phân tích lại + redesign. Đã xác nhận root cause sâu hơn: cookie SSO Keycloak
+là theo **browser + realm**, không theo client — nên bug không cần người dùng từng
+login admin UI qua `rustdesk-client`, chỉ cần tài khoản đó từng login *bất kỳ đâu*
+trong realm. Quyết định mới (đảo ngược "Không làm" ở dưới): **thêm `prompt=login` vào
+`/admin/login`** để chặn root cause, đồng thời thống nhất luôn cả 3 nhánh lỗi dead-end
+còn lại (không chỉ riêng 403). Xem plan đầy đủ tại
+`.claude/plans/redesign-login-logout-admin-ui.md`. Phần code/Approach ở dưới (helper
+`buildKeycloakLogoutUrl`, recovery link 403 dùng Keycloak end-session) đã bị thay bằng
+cách đơn giản hơn ở plan mới — giữ nguyên ở đây chỉ để tham khảo lịch sử.
+
 ### 2026-06-20 — Đã triển khai xong code
 
 `node --check server.js` pass. 3 thay đổi đã áp dụng đúng như mục "Approach":

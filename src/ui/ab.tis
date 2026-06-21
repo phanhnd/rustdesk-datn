@@ -18,7 +18,7 @@ class AddressBook: Reactor.Component
     function render() {
         if (!handler.get_local_option("access_token")) {
             if (abLoading) {
-                return <div style="margin: *"><progress style="color: #e91e63" /></div>;
+                return <div style="margin: *"><progress style="color: #00D2D3" /></div>;
             } else if (abError) {
                 return <div style="margin: *; text-align: center;">{abError}
                     <div #retry .link style="margin-left: 1em;">{translate("Retry")}</div>
@@ -32,7 +32,7 @@ class AddressBook: Reactor.Component
             return <div style="margin: *"><div #login-link .link style="margin: *; width: 100px; text-align: center; font-size: 1.2em;">{translate("Login")}</div></div>;
         }
         if (abLoading) {
-            return <div style="margin: *"><progress style="color: #e91e63" /></div>;
+            return <div style="margin: *"><progress style="color: #00D2D3" /></div>;
         } else if (abError) {
             return <div style="margin: *; text-align: center;">{abError}
                 <div #retry .link style="margin-left: 1em;">{translate("Retry")}</div>
@@ -761,7 +761,7 @@ function getAddressBooks() {
             if (data && data.machines) {
                 var seen = {};
                 data.machines.map(function(m) {
-                    (m.roles || []).map(function(r) {
+                    (m.groups || []).map(function(r) {
                         if (!seen[r]) { seen[r] = true; ab.tags.push(r); }
                     });
                 });
@@ -772,7 +772,7 @@ function getAddressBooks() {
                         username: "",
                         hostname: "",
                         platform: "",
-                        tags:     m.roles || []
+                        tags:     m.groups || []
                     });
                 });
             }

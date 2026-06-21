@@ -208,9 +208,9 @@
   </header>
 
   <nav>
-    <button class="active" onclick="switchTab('users',this)">Người dùng</button>
-    <button onclick="switchTab('roles',this)">Danh sách role</button>
-    <button onclick="switchTab('machines',this)">Danh sách máy</button>
+    <button class="active" data-tab="users" onclick="switchTab('users',this)">Người dùng</button>
+    <button data-tab="groups" onclick="switchTab('groups',this)">Danh sách group</button>
+    <button data-tab="machines" onclick="switchTab('machines',this)">Danh sách máy</button>
   </nav>
 
   <main>
@@ -234,20 +234,20 @@
       <div id="users-content"><div class="loading">Đang tải...</div></div>
     </div>
 
-    <!-- Tab: Roles -->
-    <div class="tab" id="tab-roles">
-      <h2>Danh sách role</h2>
+    <!-- Tab: Groups -->
+    <div class="tab" id="tab-groups">
+      <h2>Danh sách group</h2>
 
-      <div class="card" style="margin-bottom:20px">
-        <h3 style="font-size:.95rem;color:var(--accent);margin-bottom:12px">Tạo role mới (Keycloak)</h3>
+      <div class="card" id="create-group-section" style="margin-bottom:20px">
+        <h3 style="font-size:.95rem;color:var(--accent);margin-bottom:12px">Tạo group mới (Keycloak)</h3>
         <div class="form-row" style="margin-bottom:8px">
-          <input id="new-role-name" placeholder="Tên role mới..." style="width:200px">
-          <button class="btn btn-primary btn-sm" onclick="createKcRole()">+ Tạo role</button>
+          <input id="new-group-name" placeholder="Tên group mới..." style="width:200px">
+          <button class="btn btn-primary btn-sm" onclick="createGroup()">+ Tạo group</button>
         </div>
-        <div id="roles-list-actions" style="margin-top:8px"></div>
+        <div id="groups-list-actions" style="margin-top:8px"></div>
       </div>
 
-      <div id="roles-content"><div class="loading">Đang tải...</div></div>
+      <div id="groups-content"><div class="loading">Đang tải...</div></div>
     </div>
 
     <!-- Tab: Machines -->
@@ -276,10 +276,11 @@ document.getElementById('brand-logo-login').src = LOGO_DATA_URI;
 document.getElementById('brand-logo-header').src = LOGO_DATA_URI;
 
 // ── State ──────────────────────────────────────────────────────────────────
-let kcRoles     = [];   // [{id, name}]
+let kcGroups    = [];   // [{id, name}]
 let allMachines = [];   // [{id, alias, rustdesk_id, note}]
-let roleDetails = [];   // [{name, machine_ids, machines, users}]
-let allUsers    = [];   // [{id, username, firstName, lastName, email, roles}]
+let groupDetails = [];  // [{id, name, machine_ids, machines, users}]
+let allUsers    = [];   // [{id, username, firstName, lastName, email, groups, adminRoles}]
+let myAdminRoles = [];  // role admin-tier của chính người đang đăng nhập (admin/manage_users/manage_machines)
 
 // ── Auth ───────────────────────────────────────────────────────────────────
 async function checkSession() {
@@ -290,6 +291,8 @@ async function checkSession() {
       document.getElementById('login-page').style.display = 'none';
       document.getElementById('app').style.display = 'flex';
       document.getElementById('admin-label').textContent = data.username;
+      myAdminRoles = data.roles || [];
+      applyTierVisibility();
       loadAll();
     }
   } catch (e) {
@@ -308,6 +311,19 @@ async function doLogout() {
   }
 }
 
+// ── Tier visibility (admin tối cao / quản trị người dùng / quản trị máy trạm) ──
+function isSuperAdmin()      { return myAdminRoles.includes('admin'); }
+function canManageUsers()    { return isSuperAdmin() || myAdminRoles.includes('manage_users'); }
+function canManageMachines() { return isSuperAdmin() || myAdminRoles.includes('manage_machines'); }
+
+function applyTierVisibility() {
+  document.querySelectorAll('nav button[data-tab="users"]').forEach(b => b.style.display = canManageUsers() ? '' : 'none');
+  document.querySelectorAll('nav button[data-tab="groups"]').forEach(b => b.style.display = (canManageUsers() || canManageMachines()) ? '' : 'none');
+  document.querySelectorAll('nav button[data-tab="machines"]').forEach(b => b.style.display = canManageMachines() ? '' : 'none');
+  const createGroupSection = document.getElementById('create-group-section');
+  if (createGroupSection) createGroupSection.style.display = isSuperAdmin() ? '' : 'none';
+}
+
 // ── Tab switching ──────────────────────────────────────────────────────────
 function switchTab(name, btn) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -321,18 +337,18 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-async function fetchKcRoles() {
+async function fetchGroups() {
   try {
-    const r = await fetch('/admin/api/keycloak-roles');
+    const r = await fetch('/admin/api/groups');
     const d = await r.json();
-    kcRoles = Array.isArray(d) ? d : [];
-  } catch (_) { kcRoles = []; }
+    kcGroups = Array.isArray(d.groups) ? d.groups.map(g => ({ id: g.id, name: g.name })) : [];
+  } catch (_) { kcGroups = []; }
 }
 
 // ── Load all ───────────────────────────────────────────────────────────────
 async function loadAll() {
-  await fetchKcRoles();
-  await Promise.all([loadUsers(), loadRoles(), loadMachines()]);
+  await fetchGroups();
+  await Promise.all([loadUsers(), loadGroups(), loadMachines()]);
 }
 
 // ── Users ──────────────────────────────────────────────────────────────────
@@ -383,7 +399,7 @@ async function loadUsers() {
       <div class="tbl-wrap">
       <table>
         <thead><tr>
-          <th>Username</th><th>Tên</th><th>Email</th><th>Roles</th><th>Trạng thái</th><th>Thao tác</th>
+          <th>Username</th><th>Tên</th><th>Email</th><th>Groups</th><th>Trạng thái</th><th>Thao tác</th>
         </tr></thead>
         <tbody>
           ${users.map(u => {
@@ -393,13 +409,15 @@ async function loadUsers() {
               <td><strong>${esc(u.username || '')}</strong></td>
               <td>${esc(fullName)}</td>
               <td>${esc(u.email || '—')}</td>
-              <td>${renderUserRoles(u)}</td>
+              <td>${renderUserGroups(u)}</td>
               <td>${u.enabled
                 ? '<span class="badge badge-green">Active</span>'
                 : '<span class="badge badge-red">Disabled</span>'}</td>
               <td style="white-space:nowrap">
                 <button class="btn btn-outline btn-sm"
-                  onclick="openRoleEditor('${u.id}','${esc(u.username)}')">Gán role</button>
+                  onclick="openGroupAssignEditor('${u.id}','${esc(u.username)}')">Gán group</button>
+                ${isSuperAdmin() ? `<button class="btn btn-outline btn-sm" style="margin-left:4px"
+                  onclick="openAdminTierEditor('${u.id}','${esc(u.username)}')">Gán admin-tier</button>` : ''}
                 <button class="btn btn-sm ${u.enabled ? 'btn-danger' : 'btn-primary'}" style="margin-left:4px"
                   onclick="toggleUser('${u.id}', ${!u.enabled}, this)">${u.enabled ? 'Vô hiệu hoá' : 'Kích hoạt'}</button>
                 <button class="btn btn-danger btn-sm" style="margin-left:4px"
@@ -414,10 +432,10 @@ async function loadUsers() {
   }
 }
 
-function renderUserRoles(u) {
-  const roles = (u.roles || []).filter(r => !['offline_access','uma_authorization'].includes(r));
-  if (!roles.length) return '<span class="badge badge-gray">—</span>';
-  return roles.map(r => `<span class="badge badge-blue">${esc(r)}</span>`).join('');
+function renderUserGroups(u) {
+  const groups = u.groups || [];
+  if (!groups.length) return '<span class="badge badge-gray">—</span>';
+  return groups.map(g => `<span class="badge badge-blue">${esc(g)}</span>`).join('');
 }
 
 async function toggleUser(id, enable, btn) {
@@ -441,157 +459,201 @@ async function deleteUser(id, username) {
   } catch (e) { alert('Lỗi: ' + e.message); }
 }
 
-async function openRoleEditor(userId, username) {
+async function openGroupAssignEditor(userId, username) {
   const usersRes = await fetch('/admin/api/users');
   const users = await usersRes.json();
   const user = users.find(u => u.id === userId) || {};
-  const currentRoles = user.roles || [];
+  const currentGroups = user.groups || [];
 
-  const roles = (Array.isArray(kcRoles) ? kcRoles : [])
-    .filter(r => !['offline_access','uma_authorization'].includes(r.name));
+  const groups = Array.isArray(kcGroups) ? kcGroups : [];
 
   const dialog = document.createElement('div');
   dialog.className = 'modal-overlay';
   dialog.innerHTML = `
     <div class="modal-box" style="min-width:320px">
-      <h3>Roles của <em>${esc(username)}</em></h3>
+      <h3>Group của <em>${esc(username)}</em></h3>
       <div style="margin-bottom:18px">
-        ${roles.map(role => `
+        ${groups.map(group => `
           <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer">
-            <input type="checkbox" value="${esc(role.name)}"
-              ${currentRoles.includes(role.name) ? 'checked' : ''}
+            <input type="checkbox" value="${esc(group.id)}"
+              ${currentGroups.includes(group.name) ? 'checked' : ''}
               style="width:16px;height:16px;accent-color:var(--accent)">
-            <span>${esc(role.name)}</span>
+            <span>${esc(group.name)}</span>
           </label>`).join('')}
-        ${roles.length === 0 ? '<p style="color:var(--text-muted)">Chưa có realm role nào.</p>' : ''}
+        ${groups.length === 0 ? '<p style="color:var(--text-muted)">Chưa có group nào.</p>' : ''}
       </div>
       <div class="modal-footer">
         <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">Huỷ</button>
-        <button class="btn btn-primary" onclick="saveUserRoles('${userId}', this)">Lưu</button>
+        <button class="btn btn-primary" onclick="saveGroupAssignment('${userId}', this)">Lưu</button>
       </div>
     </div>`;
   document.body.appendChild(dialog);
 }
 
-async function saveUserRoles(userId, btn) {
+async function saveGroupAssignment(userId, btn) {
   const dialog = btn.closest('.modal-overlay');
-  const checked   = [...dialog.querySelectorAll('input[type=checkbox]:checked')].map(c => c.value);
-  const unchecked = [...dialog.querySelectorAll('input[type=checkbox]:not(:checked)')].map(c => c.value);
-
-  const usersRes = await fetch('/admin/api/users');
-  const users = await usersRes.json();
-  const user = users.find(u => u.id === userId) || { roles: [] };
-
-  const safeKcRoles = Array.isArray(kcRoles) ? kcRoles : [];
-  const toAdd    = safeKcRoles.filter(r => checked.includes(r.name)   && !user.roles.includes(r.name));
-  const toRemove = safeKcRoles.filter(r => unchecked.includes(r.name) &&  user.roles.includes(r.name));
+  // Group-membership API của Keycloak là idempotent (PUT/DELETE theo id), nên cứ
+  // gửi add cho mọi checkbox đang tick, remove cho mọi checkbox đang bỏ tick — không
+  // cần tính diff so với trạng thái hiện tại.
+  const toAddIds    = [...dialog.querySelectorAll('input[type=checkbox]:checked')].map(c => c.value);
+  const toRemoveIds = [...dialog.querySelectorAll('input[type=checkbox]:not(:checked)')].map(c => c.value);
 
   btn.disabled = true;
   try {
-    if (toAdd.length)
-      await fetch(`/admin/api/users/${userId}/roles`, {
+    if (toAddIds.length)
+      await fetch(`/admin/api/users/${userId}/groups`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roles: toAdd }),
+        body: JSON.stringify({ groupIds: toAddIds }),
       });
-    if (toRemove.length)
-      await fetch(`/admin/api/users/${userId}/roles`, {
+    if (toRemoveIds.length)
+      await fetch(`/admin/api/users/${userId}/groups`, {
         method: 'DELETE', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roles: toRemove }),
+        body: JSON.stringify({ groupIds: toRemoveIds }),
       });
     dialog.remove();
     await loadUsers();
   } catch (e) { alert('Lỗi: ' + e.message); btn.disabled = false; }
 }
 
-// ── Keycloak role CRUD ─────────────────────────────────────────────────────
-async function createKcRole() {
-  const name = document.getElementById('new-role-name').value.trim();
+// ── Admin-tier role assignment (admin/manage_users/manage_machines) — chỉ admin tối cao ──
+function openAdminTierEditor(userId, username) {
+  const user = allUsers.find(u => u.id === userId) || {};
+  const currentAdminRoles = user.adminRoles || [];
+  const tiers = [
+    { name: 'admin',           label: 'Admin tối cao' },
+    { name: 'manage_users',    label: 'Quản trị người dùng và phân quyền' },
+    { name: 'manage_machines', label: 'Quản trị máy trạm' },
+  ];
+
+  const dialog = document.createElement('div');
+  dialog.className = 'modal-overlay';
+  dialog.innerHTML = `
+    <div class="modal-box" style="min-width:340px">
+      <h3>Quyền admin-tier của <em>${esc(username)}</em></h3>
+      <div style="margin-bottom:18px">
+        ${tiers.map(t => `
+          <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer">
+            <input type="checkbox" value="${t.name}"
+              ${currentAdminRoles.includes(t.name) ? 'checked' : ''}
+              style="width:16px;height:16px;accent-color:var(--accent)">
+            <span>${esc(t.label)}</span>
+          </label>`).join('')}
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">Huỷ</button>
+        <button class="btn btn-primary" onclick="saveAdminTierAssignment('${userId}', this)">Lưu</button>
+      </div>
+    </div>`;
+  document.body.appendChild(dialog);
+}
+
+async function saveAdminTierAssignment(userId, btn) {
+  const dialog = btn.closest('.modal-overlay');
+  const checked   = [...dialog.querySelectorAll('input[type=checkbox]:checked')].map(c => c.value);
+  const unchecked = [...dialog.querySelectorAll('input[type=checkbox]:not(:checked)')].map(c => c.value);
+  btn.disabled = true;
+  try {
+    if (checked.length)
+      await fetch(`/admin/api/users/${userId}/admin-roles`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roles: checked }),
+      });
+    if (unchecked.length)
+      await fetch(`/admin/api/users/${userId}/admin-roles`, {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roles: unchecked }),
+      });
+    dialog.remove();
+    await loadUsers();
+  } catch (e) { alert('Lỗi: ' + e.message); btn.disabled = false; }
+}
+
+// ── Keycloak Group CRUD ────────────────────────────────────────────────────
+async function createGroup() {
+  const name = document.getElementById('new-group-name').value.trim();
   if (!name) return;
   try {
-    const r = await fetch('/admin/api/keycloak-roles', {
+    const r = await fetch('/admin/api/groups', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
     });
     const data = await r.json();
     if (!r.ok) { alert('Lỗi: ' + (data.error || r.status)); return; }
-    document.getElementById('new-role-name').value = '';
-    await fetchKcRoles();
-    await loadRoles();
+    document.getElementById('new-group-name').value = '';
+    await fetchGroups();
+    await loadGroups();
   } catch (e) { alert('Lỗi: ' + e.message); }
 }
 
-async function deleteKcRole(name) {
-  if (!confirm(`Xoá role "${name}"? Tất cả user có role này sẽ bị thu hồi quyền.`)) return;
+async function deleteGroup(groupId, groupName) {
+  if (!confirm(`Xoá group "${groupName}"? Tất cả user trong group này sẽ bị thu hồi quyền truy cập máy.`)) return;
   try {
-    const r = await fetch(`/admin/api/keycloak-roles/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const r = await fetch(`/admin/api/groups/${encodeURIComponent(groupId)}`, { method: 'DELETE' });
     const data = await r.json();
     if (!r.ok) { alert('Lỗi: ' + (data.error || r.status)); return; }
-    await fetchKcRoles();
-    await loadRoles();
+    await fetchGroups();
+    await loadGroups();
     await loadUsers();
   } catch (e) { alert('Lỗi: ' + e.message); }
 }
 
-function renderRoleDeleteChips() {
-  const el = document.getElementById('roles-list-actions');
-  const roles = (Array.isArray(kcRoles) ? kcRoles : [])
-    .filter(r => !['offline_access','uma_authorization'].includes(r.name));
-  if (!roles.length) { el.innerHTML = ''; return; }
-  el.innerHTML = '<div style="margin-bottom:6px;color:var(--text-muted);font-size:.82rem">Roles hiện tại:</div>' +
-    roles.map(r => `
+function renderGroupDeleteChips() {
+  const el = document.getElementById('groups-list-actions');
+  const groups = Array.isArray(kcGroups) ? kcGroups : [];
+  if (!groups.length) { el.innerHTML = ''; return; }
+  el.innerHTML = '<div style="margin-bottom:6px;color:var(--text-muted);font-size:.82rem">Groups hiện tại:</div>' +
+    groups.map(g => `
       <span class="tag-chip">
-        ${esc(r.name)}
-        <button onclick="deleteKcRole('${esc(r.name)}')" title="Xoá role" style="color:var(--danger)">×</button>
+        ${esc(g.name)}
+        <button onclick="deleteGroup('${esc(g.id)}','${esc(g.name)}')" title="Xoá group" style="color:var(--danger)">×</button>
       </span>`).join('');
 }
 
-// ── Roles (card view) ──────────────────────────────────────────────────────
-async function loadRoles() {
-  const el = document.getElementById('roles-content');
+// ── Groups (card view) ──────────────────────────────────────────────────────
+async function loadGroups() {
+  const el = document.getElementById('groups-content');
   el.innerHTML = '<div class="loading">Đang tải...</div>';
   try {
-    const [rolesRes, machinesRes] = await Promise.all([
-      fetch('/admin/api/roles'),
+    const [groupsRes, machinesRes] = await Promise.all([
+      fetch('/admin/api/groups'),
       fetch('/admin/api/machines'),
     ]);
-    const rolesData = await rolesRes.json();
+    const groupsData = await groupsRes.json();
     allMachines = await machinesRes.json();
     if (!Array.isArray(allMachines)) allMachines = [];
 
     let warningHtml = '';
-    if (rolesData && rolesData.roles !== undefined) {
-      roleDetails = Array.isArray(rolesData.roles) ? rolesData.roles : [];
-      if (rolesData.kcError) {
+    if (groupsData && groupsData.groups !== undefined) {
+      groupDetails = Array.isArray(groupsData.groups) ? groupsData.groups : [];
+      if (groupsData.kcError) {
         warningHtml = `<div style="background:#fff3cd;border:1px solid #ffc107;padding:10px 14px;
           border-radius:6px;margin-bottom:16px;font-size:.87rem;color:#856404">
-          ⚠️ Không thể kết nối Keycloak: ${esc(rolesData.kcError)}<br>
-          Hiển thị role từ dữ liệu local (không có thông tin user).
+          ⚠️ Không thể kết nối Keycloak: ${esc(groupsData.kcError)}<br>
+          Hiển thị group từ dữ liệu local (không có thông tin user).
         </div>`;
       }
-    } else if (Array.isArray(rolesData)) {
-      roleDetails = rolesData;
     } else {
-      roleDetails = [];
-      el.innerHTML = `<div class="empty" style="color:var(--danger)">Lỗi tải role: ${esc(JSON.stringify(rolesData))}</div>`;
+      groupDetails = [];
+      el.innerHTML = `<div class="empty" style="color:var(--danger)">Lỗi tải group: ${esc(JSON.stringify(groupsData))}</div>`;
       return;
     }
 
-    renderRoleDeleteChips();
+    renderGroupDeleteChips();
 
-    if (!roleDetails.length) {
-      el.innerHTML = warningHtml + '<div class="empty">Chưa có role nào. Tạo role ở trên.</div>';
+    if (!groupDetails.length) {
+      el.innerHTML = warningHtml + '<div class="empty">Chưa có group nào. Tạo group ở trên.</div>';
       return;
     }
-    el.innerHTML = warningHtml + roleDetails.map(role => renderRoleCard(role)).join('');
+    el.innerHTML = warningHtml + groupDetails.map(group => renderGroupCard(group)).join('');
   } catch (e) {
     el.innerHTML = `<div class="empty" style="color:var(--danger)">Lỗi kết nối: ${esc(e.message)}</div>`;
   }
 }
 
-function renderRoleCard(role) {
-  const users    = role.users    || [];
-  const machines = role.machines || [];
+function renderGroupCard(group) {
+  const users    = group.users    || [];
+  const machines = group.machines || [];
 
   const usersHtml = users.length
     ? `<table class="user-mini-table">
@@ -603,58 +665,58 @@ function renderRoleCard(role) {
             <td style="color:var(--text-muted)">${esc(u.email || '')}</td>
             <td style="width:32px">
               <button class="btn btn-danger btn-sm" style="padding:1px 7px;font-size:.8rem"
-                onclick="removeUserFromRole('${esc(role.name)}','${esc(u.id)}','${esc(u.username)}')"
-                title="Gỡ user khỏi role">×</button>
+                onclick="removeUserFromGroup('${esc(group.id)}','${esc(u.id)}','${esc(u.username)}')"
+                title="Gỡ user khỏi group">×</button>
             </td>
           </tr>`;
         }).join('')}
       </table>`
-    : '<div style="color:var(--text-muted);font-size:.85rem">Chưa có user nào được gán role này.</div>';
+    : '<div style="color:var(--text-muted);font-size:.85rem">Chưa có user nào trong group này.</div>';
 
   const machinesHtml = machines.length
     ? machines.map(m => `
         <span class="machine-chip">
           ${esc(m.alias || m.id)}
-          <button onclick="removeMachineFromRole('${esc(role.name)}','${esc(m.id)}')" title="Gỡ máy khỏi role">×</button>
+          <button onclick="removeMachineFromGroup('${esc(group.name)}','${esc(m.id)}')" title="Gỡ máy khỏi group">×</button>
         </span>`).join('')
     : '<span style="color:var(--text-muted);font-size:.85rem">Chưa có máy nào.</span>';
 
   return `
     <div class="card">
       <div class="card-header">
-        <h3>${esc(role.name)}</h3>
-        <button class="btn btn-danger btn-sm" onclick="deleteKcRole('${esc(role.name)}')">Xoá role</button>
+        <h3>${esc(group.name)}</h3>
+        ${isSuperAdmin() ? `<button class="btn btn-danger btn-sm" onclick="deleteGroup('${esc(group.id)}','${esc(group.name)}')">Xoá group</button>` : ''}
       </div>
 
       <div class="role-section-label">
         Người dùng (${users.length})
-        <button class="btn btn-outline btn-sm" style="margin-left:10px;font-size:.78rem"
-          onclick="openAddUserToRole('${esc(role.name)}')">+ Thêm user</button>
+        ${canManageUsers() ? `<button class="btn btn-outline btn-sm" style="margin-left:10px;font-size:.78rem"
+          onclick="openAddUserToGroup('${esc(group.id)}')">+ Thêm user</button>` : ''}
       </div>
       <div style="margin-bottom:12px">${usersHtml}</div>
 
       <div class="role-section-label">
         Máy được truy cập (${machines.length})
-        <button class="btn btn-outline btn-sm" style="margin-left:10px;font-size:.78rem"
-          onclick="openAddMachineToRole('${esc(role.name)}')">+ Thêm máy</button>
+        ${canManageMachines() ? `<button class="btn btn-outline btn-sm" style="margin-left:10px;font-size:.78rem"
+          onclick="openAddMachineToGroup('${esc(group.name)}')">+ Thêm máy</button>` : ''}
       </div>
       <div>${machinesHtml}</div>
     </div>`;
 }
 
-async function openAddMachineToRole(roleName) {
-  const role = roleDetails.find(r => r.name === roleName);
-  if (!role) return;
-  const currentIds = new Set(role.machine_ids || []);
+async function openAddMachineToGroup(groupName) {
+  const group = groupDetails.find(g => g.name === groupName);
+  if (!group) return;
+  const currentIds = new Set(group.machine_ids || []);
   const available = allMachines.filter(m => !currentIds.has(m.id));
 
-  if (!available.length) { alert('Tất cả máy đã được thêm vào role này.'); return; }
+  if (!available.length) { alert('Tất cả máy đã được thêm vào group này.'); return; }
 
   const dialog = document.createElement('div');
   dialog.className = 'modal-overlay';
   dialog.innerHTML = `
     <div class="modal-box" style="min-width:360px">
-      <h3>Thêm máy vào role <em>${esc(roleName)}</em></h3>
+      <h3>Thêm máy vào group <em>${esc(groupName)}</em></h3>
       <div style="max-height:260px;overflow-y:auto;margin-bottom:4px">
         ${available.map(m => `
           <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer">
@@ -665,46 +727,46 @@ async function openAddMachineToRole(roleName) {
       </div>
       <div class="modal-footer">
         <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">Huỷ</button>
-        <button class="btn btn-primary" onclick="saveAddMachineToRole('${esc(roleName)}',this)">Thêm</button>
+        <button class="btn btn-primary" onclick="saveAddMachineToGroup('${esc(groupName)}',this)">Thêm</button>
       </div>
     </div>`;
   document.body.appendChild(dialog);
 }
 
-async function saveAddMachineToRole(roleName, btn) {
+async function saveAddMachineToGroup(groupName, btn) {
   const dialog = btn.closest('.modal-overlay');
   const selected = [...dialog.querySelectorAll('input[type=checkbox]:checked')].map(c => c.value);
   if (!selected.length) { dialog.remove(); return; }
 
-  const role = roleDetails.find(r => r.name === roleName);
-  if (!role) return;
-  const newIds = [...new Set([...(role.machine_ids || []), ...selected])];
+  const group = groupDetails.find(g => g.name === groupName);
+  if (!group) return;
+  const newIds = [...new Set([...(group.machine_ids || []), ...selected])];
 
   btn.disabled = true;
   try {
-    await putRoleMachines(roleName, newIds);
+    await putGroupMachines(groupName, newIds);
     dialog.remove();
-    await loadRoles();
+    await loadGroups();
   } catch (e) { alert('Lỗi: ' + e.message); btn.disabled = false; }
 }
 
-async function removeMachineFromRole(roleName, machineId) {
-  const role = roleDetails.find(r => r.name === roleName);
-  if (!role) return;
-  const newIds = (role.machine_ids || []).filter(id => id !== machineId);
+async function removeMachineFromGroup(groupName, machineId) {
+  const group = groupDetails.find(g => g.name === groupName);
+  if (!group) return;
+  const newIds = (group.machine_ids || []).filter(id => id !== machineId);
   try {
-    await putRoleMachines(roleName, newIds);
-    await loadRoles();
+    await putGroupMachines(groupName, newIds);
+    await loadGroups();
   } catch (e) { alert('Lỗi: ' + e.message); }
 }
 
-async function putRoleMachines(roleName, machineIds) {
-  // Build full mapping from current roleDetails, updating the target role
+async function putGroupMachines(groupName, machineIds) {
+  // Build full mapping from current groupDetails, updating the target group
   const mapping = {};
-  for (const r of roleDetails) {
-    mapping[r.name] = r.name === roleName ? machineIds : (r.machine_ids || []);
+  for (const g of groupDetails) {
+    mapping[g.name] = g.name === groupName ? machineIds : (g.machine_ids || []);
   }
-  const res = await fetch('/admin/api/roles', {
+  const res = await fetch('/admin/api/groups', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(mapping),
@@ -715,26 +777,24 @@ async function putRoleMachines(roleName, machineIds) {
   }
 }
 
-// ── Role ↔ User management ────────────────────────────────────────────────
-async function removeUserFromRole(roleName, userId, username) {
-  if (!confirm(`Gỡ user "${username}" khỏi role "${roleName}"?`)) return;
-  const roleObj = kcRoles.find(r => r.name === roleName);
-  if (!roleObj) { alert('Không tìm thấy role trong danh sách.'); return; }
+// ── Group ↔ User management ────────────────────────────────────────────────
+async function removeUserFromGroup(groupId, userId, username) {
+  if (!confirm(`Gỡ user "${username}" khỏi group này?`)) return;
   try {
-    const r = await fetch(`/admin/api/users/${userId}/roles`, {
+    const r = await fetch(`/admin/api/users/${userId}/groups`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ roles: [roleObj] }),
+      body: JSON.stringify({ groupIds: [groupId] }),
     });
     if (!r.ok) { const d = await r.json(); alert('Lỗi: ' + (d.error || r.status)); return; }
-    await Promise.all([loadRoles(), loadUsers()]);
+    await Promise.all([loadGroups(), loadUsers()]);
   } catch (e) { alert('Lỗi: ' + e.message); }
 }
 
-async function openAddUserToRole(roleName) {
-  const role = roleDetails.find(r => r.name === roleName);
-  if (!role) return;
-  const existingIds = new Set((role.users || []).map(u => u.id));
+async function openAddUserToGroup(groupId) {
+  const group = groupDetails.find(g => g.id === groupId);
+  if (!group) return;
+  const existingIds = new Set((group.users || []).map(u => u.id));
 
   let users = allUsers;
   if (!users.length) {
@@ -743,13 +803,13 @@ async function openAddUserToRole(roleName) {
     allUsers = Array.isArray(users) ? users : [];
   }
   const available = users.filter(u => !existingIds.has(u.id));
-  if (!available.length) { alert('Tất cả user đã thuộc role này.'); return; }
+  if (!available.length) { alert('Tất cả user đã thuộc group này.'); return; }
 
   const dialog = document.createElement('div');
   dialog.className = 'modal-overlay';
   dialog.innerHTML = `
     <div class="modal-box" style="min-width:400px">
-      <h3>Thêm user vào role <em>${esc(roleName)}</em></h3>
+      <h3>Thêm user vào group <em>${esc(group.name)}</em></h3>
       <div style="max-height:300px;overflow-y:auto;padding:4px 0">
         ${available.map(u => {
           const name = [u.firstName, u.lastName].filter(Boolean).join(' ');
@@ -765,29 +825,27 @@ async function openAddUserToRole(roleName) {
       </div>
       <div class="modal-footer">
         <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">Huỷ</button>
-        <button class="btn btn-primary" onclick="saveAddUserToRole('${esc(roleName)}',this)">Thêm</button>
+        <button class="btn btn-primary" onclick="saveAddUserToGroup('${esc(groupId)}',this)">Thêm</button>
       </div>
     </div>`;
   document.body.appendChild(dialog);
 }
 
-async function saveAddUserToRole(roleName, btn) {
+async function saveAddUserToGroup(groupId, btn) {
   const dialog = btn.closest('.modal-overlay');
   const selected = [...dialog.querySelectorAll('input[type=checkbox]:checked')].map(c => c.value);
   if (!selected.length) { dialog.remove(); return; }
-  const roleObj = kcRoles.find(r => r.name === roleName);
-  if (!roleObj) { alert('Không tìm thấy role.'); return; }
   btn.disabled = true;
   try {
     await Promise.all(selected.map(userId =>
-      fetch(`/admin/api/users/${userId}/roles`, {
+      fetch(`/admin/api/users/${userId}/groups`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roles: [roleObj] }),
+        body: JSON.stringify({ groupIds: [groupId] }),
       })
     ));
     dialog.remove();
-    await Promise.all([loadRoles(), loadUsers()]);
+    await Promise.all([loadGroups(), loadUsers()]);
   } catch (e) { alert('Lỗi: ' + e.message); btn.disabled = false; }
 }
 
@@ -808,7 +866,7 @@ async function loadMachines() {
       <div class="tbl-wrap">
       <table>
         <thead><tr>
-          <th>Alias</th><th>RustDesk ID</th><th>Ghi chú</th><th>Roles</th><th>Thao tác</th>
+          <th>Alias</th><th>RustDesk ID</th><th>Ghi chú</th><th>Groups</th><th>Thao tác</th>
         </tr></thead>
         <tbody>
           ${allMachines.map(m => `
@@ -816,7 +874,7 @@ async function loadMachines() {
               <td><strong>${esc(m.alias || '—')}</strong></td>
               <td><code>${esc(m.rustdesk_id || '—')}</code></td>
               <td style="color:var(--text-muted)">${esc(m.note || '—')}</td>
-              <td>${(m.roles || []).map(r => `<span class="badge badge-blue">${esc(r)}</span>`).join('') || '<span style="color:var(--text-muted)">—</span>'}</td>
+              <td>${(m.groups || []).map(g => `<span class="badge badge-blue">${esc(g)}</span>`).join('') || '<span style="color:var(--text-muted)">—</span>'}</td>
               <td style="white-space:nowrap">
                 <button class="btn btn-outline btn-sm"
                   onclick="openEditMachine('${esc(m.id)}')">Sửa</button>
@@ -858,18 +916,17 @@ async function addMachine() {
 function openEditMachine(machineId) {
   const m = allMachines.find(x => x.id === machineId);
   if (!m) return;
-  const currentRoles = m.roles || [];
-  const roleCheckboxes = (Array.isArray(kcRoles) ? kcRoles : [])
-    .filter(r => !['offline_access','uma_authorization'].includes(r.name));
-  const rolesHtml = roleCheckboxes.length
-    ? roleCheckboxes.map(r => `
+  const currentGroups = m.groups || [];
+  const groupCheckboxes = Array.isArray(kcGroups) ? kcGroups : [];
+  const groupsHtml = groupCheckboxes.length
+    ? groupCheckboxes.map(g => `
         <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer">
-          <input type="checkbox" class="em-role-cb" value="${esc(r.name)}"
-            ${currentRoles.includes(r.name) ? 'checked' : ''}
+          <input type="checkbox" class="em-group-cb" value="${esc(g.name)}"
+            ${currentGroups.includes(g.name) ? 'checked' : ''}
             style="width:16px;height:16px;accent-color:var(--accent)">
-          <span>${esc(r.name)}</span>
+          <span>${esc(g.name)}</span>
         </label>`).join('')
-    : '<span style="color:var(--text-muted);font-size:.85rem">Chưa load được roles từ Keycloak.</span>';
+    : '<span style="color:var(--text-muted);font-size:.85rem">Chưa load được group từ Keycloak.</span>';
 
   const dialog = document.createElement('div');
   dialog.className = 'modal-overlay';
@@ -882,9 +939,9 @@ function openEditMachine(machineId) {
       <input id="em-rustdesk-id" value="${esc(m.rustdesk_id || '')}" placeholder="RustDesk ID">
       <label>Ghi chú</label>
       <input id="em-note"        value="${esc(m.note        || '')}" placeholder="Ghi chú">
-      <label>Roles được phép truy cập</label>
+      <label>Groups được phép truy cập</label>
       <div style="max-height:140px;overflow-y:auto;padding:8px;border:1px solid var(--border);border-radius:6px;margin-top:4px">
-        ${rolesHtml}
+        ${groupsHtml}
       </div>
       <div class="modal-footer">
         <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">Huỷ</button>
@@ -899,27 +956,27 @@ async function saveEditMachine(machineId, btn) {
   const alias       = dialog.querySelector('#em-alias').value.trim();
   const rustdesk_id = dialog.querySelector('#em-rustdesk-id').value.trim();
   const note        = dialog.querySelector('#em-note').value.trim();
-  const roles       = [...dialog.querySelectorAll('input.em-role-cb:checked')].map(c => c.value);
+  const groups      = [...dialog.querySelectorAll('input.em-group-cb:checked')].map(c => c.value);
   if (!alias) { alert('Alias là bắt buộc.'); return; }
   btn.disabled = true;
   try {
     const r = await fetch(`/admin/api/machines/${encodeURIComponent(machineId)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ alias, rustdesk_id, note, roles }),
+      body: JSON.stringify({ alias, rustdesk_id, note, groups }),
     });
     if (!r.ok) { const d = await r.json(); alert('Lỗi: ' + (d.error || r.status)); btn.disabled = false; return; }
     dialog.remove();
-    await Promise.all([loadMachines(), loadRoles()]);
+    await Promise.all([loadMachines(), loadGroups()]);
   } catch (e) { alert('Lỗi: ' + e.message); btn.disabled = false; }
 }
 
 async function deleteMachine(machineId, label) {
-  if (!confirm(`Xoá máy "${label}"? Máy cũng sẽ bị xoá khỏi tất cả roles.`)) return;
+  if (!confirm(`Xoá máy "${label}"? Máy cũng sẽ bị xoá khỏi tất cả groups.`)) return;
   try {
     const r = await fetch(`/admin/api/machines/${encodeURIComponent(machineId)}`, { method: 'DELETE' });
     if (!r.ok) { const d = await r.json(); alert('Lỗi: ' + (d.error || r.status)); return; }
-    await Promise.all([loadMachines(), loadRoles()]);
+    await Promise.all([loadMachines(), loadGroups()]);
   } catch (e) { alert('Lỗi: ' + e.message); }
 }
 </script>

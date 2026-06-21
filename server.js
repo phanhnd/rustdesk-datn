@@ -19,7 +19,10 @@ const REDIRECT_URI  = `http://${VM_HOST}/api/auth/callback`;
 const ADMIN_CLIENT_ID      = 'rocky-admin';
 const ADMIN_CLIENT_SECRET  = '272LGI6gmuvA7ppbMDDefHBoehhSvxEA';
 const ADMIN_REDIRECT_URI   = `http://${VM_HOST}/admin/auth/callback`;
-const ADMIN_ROLE           = 'admin';
+const ADMIN_ROLE           = 'admin';          // admin tối cao
+const ADMIN_ROLE_USERS     = 'manage_users';    // quản trị người dùng + phân quyền (gán group)
+const ADMIN_ROLE_MACHINES  = 'manage_machines'; // quản trị máy trạm + gán máy↔group
+const ADMIN_TIER_ROLES     = [ADMIN_ROLE, ADMIN_ROLE_USERS, ADMIN_ROLE_MACHINES];
 const ADMIN_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const adminSessions = new Map(); // session token -> { sub, username, roles, expiresAt }
 const adminLoginStates = new Map(); // CSRF state -> expiresAt, short-lived during redirect round-trip
@@ -44,12 +47,12 @@ db.exec(`
     rustdesk_id TEXT NOT NULL DEFAULT '',
     note        TEXT NOT NULL DEFAULT ''
   );
-  CREATE TABLE IF NOT EXISTS machine_roles (
-    role_name  TEXT NOT NULL,
+  CREATE TABLE IF NOT EXISTS machine_groups (
+    group_name TEXT NOT NULL,
     machine_id TEXT NOT NULL,
-    PRIMARY KEY (role_name, machine_id)
+    PRIMARY KEY (group_name, machine_id)
   );
-  CREATE INDEX IF NOT EXISTS idx_machine_roles_machine ON machine_roles(machine_id);
+  CREATE INDEX IF NOT EXISTS idx_machine_groups_machine ON machine_groups(machine_id);
 `);
 
 function migrateFromJsonIfNeeded() {
@@ -66,12 +69,13 @@ function migrateFromJsonIfNeeded() {
   const insertMachineStmt = db.prepare(
     'INSERT INTO machines (id, alias, rustdesk_id, note) VALUES (?, ?, ?, ?)'
   );
-  const insertRoleStmt = db.prepare(
-    'INSERT OR IGNORE INTO machine_roles (role_name, machine_id) VALUES (?, ?)'
+  const insertGroupStmt = db.prepare(
+    'INSERT OR IGNORE INTO machine_groups (group_name, machine_id) VALUES (?, ?)'
   );
 
   if (legacy && Array.isArray(legacy.machines)) {
-    // Di trú từ data.json (bỏ field "tag")
+    // Di trú máy từ data.json (bỏ field "tag"); không di trú "roles" cũ —
+    // role Keycloak cũ (admin/viewer/guest) không tương ứng Group nào.
     for (const m of legacy.machines) {
       insertMachineStmt.run(
         m.id || crypto.randomBytes(8).toString('hex'),
@@ -80,38 +84,34 @@ function migrateFromJsonIfNeeded() {
         m.note || ''
       );
     }
-    for (const [roleName, ids] of Object.entries(legacy.roles || {})) {
-      for (const mid of ids) insertRoleStmt.run(roleName, mid);
-    }
   } else {
-    // Không có data.json cũ → seed demo machines
+    // Không có data.json cũ → seed demo machines + 1 group demo
     const demo = [
       { id: 'demo-01', alias: 'Build Server', rustdesk_id: '', note: '' },
       { id: 'demo-02', alias: 'Marketing PC', rustdesk_id: '', note: '' },
       { id: 'demo-03', alias: 'K8s Node',     rustdesk_id: '', note: '' },
     ];
     for (const m of demo) insertMachineStmt.run(m.id, m.alias, m.rustdesk_id, m.note);
-    insertRoleStmt.run('admin', 'demo-01');
-    insertRoleStmt.run('admin', 'demo-02');
-    insertRoleStmt.run('admin', 'demo-03');
-    insertRoleStmt.run('viewer', 'demo-01');
+    insertGroupStmt.run('demo-group', 'demo-01');
+    insertGroupStmt.run('demo-group', 'demo-02');
+    insertGroupStmt.run('demo-group', 'demo-03');
   }
 }
 
 migrateFromJsonIfNeeded();
 
-function attachRoles(machines) {
-  const rows = db.prepare('SELECT role_name, machine_id FROM machine_roles').all();
-  const rolesByMachine = {};
+function attachGroups(machines) {
+  const rows = db.prepare('SELECT group_name, machine_id FROM machine_groups').all();
+  const groupsByMachine = {};
   for (const row of rows) {
-    (rolesByMachine[row.machine_id] = rolesByMachine[row.machine_id] || []).push(row.role_name);
+    (groupsByMachine[row.machine_id] = groupsByMachine[row.machine_id] || []).push(row.group_name);
   }
-  return machines.map(m => ({ ...m, roles: rolesByMachine[m.id] || [] }));
+  return machines.map(m => ({ ...m, groups: groupsByMachine[m.id] || [] }));
 }
 
 function getAllMachines() {
   const machines = db.prepare('SELECT id, alias, rustdesk_id, note FROM machines').all();
-  return attachRoles(machines);
+  return attachGroups(machines);
 }
 
 function getMachineById(id) {
@@ -146,47 +146,47 @@ function updateMachine(id, { alias, rustdesk_id, note }) {
 }
 
 function deleteMachine(id) {
-  db.prepare('DELETE FROM machine_roles WHERE machine_id = ?').run(id);
+  db.prepare('DELETE FROM machine_groups WHERE machine_id = ?').run(id);
   db.prepare('DELETE FROM machines WHERE id = ?').run(id);
 }
 
-function setMachineRoles(machineId, roleNames) {
-  db.prepare('DELETE FROM machine_roles WHERE machine_id = ?').run(machineId);
-  const stmt = db.prepare('INSERT OR IGNORE INTO machine_roles (role_name, machine_id) VALUES (?, ?)');
-  for (const roleName of (roleNames || [])) stmt.run(roleName, machineId);
+function setMachineGroups(machineId, groupNames) {
+  db.prepare('DELETE FROM machine_groups WHERE machine_id = ?').run(machineId);
+  const stmt = db.prepare('INSERT OR IGNORE INTO machine_groups (group_name, machine_id) VALUES (?, ?)');
+  for (const groupName of (groupNames || [])) stmt.run(groupName, machineId);
 }
 
-function getRolesMap() {
-  const rows = db.prepare('SELECT role_name, machine_id FROM machine_roles').all();
+function getGroupsMap() {
+  const rows = db.prepare('SELECT group_name, machine_id FROM machine_groups').all();
   const map = {};
   for (const row of rows) {
-    (map[row.role_name] = map[row.role_name] || []).push(row.machine_id);
+    (map[row.group_name] = map[row.group_name] || []).push(row.machine_id);
   }
   return map;
 }
 
-function setRoleMachineIds(roleName, ids) {
-  db.prepare('DELETE FROM machine_roles WHERE role_name = ?').run(roleName);
-  const stmt = db.prepare('INSERT OR IGNORE INTO machine_roles (role_name, machine_id) VALUES (?, ?)');
+function setGroupMachineIds(groupName, ids) {
+  db.prepare('DELETE FROM machine_groups WHERE group_name = ?').run(groupName);
+  const stmt = db.prepare('INSERT OR IGNORE INTO machine_groups (group_name, machine_id) VALUES (?, ?)');
   for (const id of ids) {
-    if (machineExists(id)) stmt.run(roleName, id);
+    if (machineExists(id)) stmt.run(groupName, id);
   }
 }
 
-function deleteRoleMapping(roleName) {
-  db.prepare('DELETE FROM machine_roles WHERE role_name = ?').run(roleName);
+function deleteGroupMapping(groupName) {
+  db.prepare('DELETE FROM machine_groups WHERE group_name = ?').run(groupName);
 }
 
-function getMachinesForRoles(roleNames) {
-  if (!roleNames || !roleNames.length) return [];
-  const placeholders = roleNames.map(() => '?').join(',');
+function getMachinesForGroups(groupNames) {
+  if (!groupNames || !groupNames.length) return [];
+  const placeholders = groupNames.map(() => '?').join(',');
   const rows = db.prepare(
     `SELECT DISTINCT m.id, m.alias, m.rustdesk_id, m.note
        FROM machines m
-       JOIN machine_roles mr ON mr.machine_id = m.id
-      WHERE mr.role_name IN (${placeholders})`
-  ).all(...roleNames);
-  return attachRoles(rows);
+       JOIN machine_groups mg ON mg.machine_id = m.id
+      WHERE mg.group_name IN (${placeholders})`
+  ).all(...groupNames);
+  return attachGroups(rows);
 }
 
 const sessions = new Map();
@@ -246,15 +246,16 @@ async function getServiceToken() {
   return serviceToken;
 }
 
-// Cache client UUID để tránh gọi KC nhiều lần
-let cachedClientUuid = null;
-async function getClientUuid() {
-  if (cachedClientUuid) return cachedClientUuid;
-  const r = await keycloakAdminGet(`/clients?clientId=${encodeURIComponent(CLIENT_ID)}`);
+// Cache UUID theo clientId để tránh gọi KC nhiều lần (rustdesk-client cho group-machine
+// access cũ, rocky-admin cho gán role admin-tier)
+const cachedClientUuids = new Map();
+async function getClientUuid(clientId = CLIENT_ID) {
+  if (cachedClientUuids.has(clientId)) return cachedClientUuids.get(clientId);
+  const r = await keycloakAdminGet(`/clients?clientId=${encodeURIComponent(clientId)}`);
   const clients = JSON.parse(r.body);
-  if (!Array.isArray(clients) || !clients.length) throw new Error('Client not found: ' + CLIENT_ID);
-  cachedClientUuid = clients[0].id;
-  return cachedClientUuid;
+  if (!Array.isArray(clients) || !clients.length) throw new Error('Client not found: ' + clientId);
+  cachedClientUuids.set(clientId, clients[0].id);
+  return clients[0].id;
 }
 
 function decodeJwtPayload(token) {
@@ -279,6 +280,17 @@ function getRolesFromPayload(payload, clientId = CLIENT_ID) {
   return roles;
 }
 
+// Đọc Group Keycloak từ claim "groups" trong JWT (cần protocol mapper "Group
+// Membership" gắn vào rustdesk-client, xem docs/address-book.md). Keycloak có thể vẫn
+// trả full path (vd. "/engineering") dù đã tắt "Full group path" ở mapper — strip 1
+// dấu "/" đầu để chuẩn hoá; chỉ hỗ trợ group flat top-level cho v1, không xử lý path lồng.
+function getGroupsFromPayload(payload) {
+  const raw = Array.isArray(payload.groups) ? payload.groups : [];
+  return raw
+    .map(g => (typeof g === 'string' ? g.replace(/^\/+/, '') : ''))
+    .filter(Boolean);
+}
+
 async function introspectToken(token, clientId, clientSecret) {
   const body = querystring.stringify({ token, client_id: clientId, client_secret: clientSecret });
   const introspectUrl = `${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/token/introspect`;
@@ -294,6 +306,13 @@ function buildKeycloakLogoutUrl(postLogoutPath) {
   return `${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/logout?${params}`;
 }
 
+function renderAdminAuthError(res, status, message) {
+  res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(`<html><body><h2>${message}</h2>
+    <p><a href="/admin/login">Quay lại đăng nhập</a></p>
+    </body></html>`);
+}
+
 function parseCookies(req) {
   const cookies = {};
   const header = req.headers.cookie || '';
@@ -304,21 +323,43 @@ function parseCookies(req) {
   return cookies;
 }
 
-function requireAdminAuth(req, res) {
+function jsonResponse(res, status, data) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data));
+}
+
+// allowedRoles=null: chỉ cần đăng nhập admin (1 trong 3 tier). allowedRoles=[...]: cần
+// đúng 1 trong các tier đó — admin tối cao (ADMIN_ROLE) luôn được bypass mọi tier-check.
+function requireAdminAuth(req, res, allowedRoles = null) {
   const cookies = parseCookies(req);
   const session = cookies.admin_session ? adminSessions.get(cookies.admin_session) : null;
   if (!session || Date.now() > session.expiresAt) {
     if (cookies.admin_session) adminSessions.delete(cookies.admin_session);
-    res.writeHead(401, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Unauthorized' }));
+    jsonResponse(res, 401, { error: 'Unauthorized' });
+    return false;
+  }
+  if (allowedRoles && !session.roles.includes(ADMIN_ROLE) &&
+      !allowedRoles.some(r => session.roles.includes(r))) {
+    jsonResponse(res, 403, { error: 'Forbidden: insufficient admin tier' });
     return false;
   }
   return true;
 }
 
-function jsonResponse(res, status, data) {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(data));
+// Chỉ admin tối cao — dùng cho tạo/xoá Group và gán role admin-tier cho user khác.
+function requireSuperAdmin(req, res) {
+  const cookies = parseCookies(req);
+  const session = cookies.admin_session ? adminSessions.get(cookies.admin_session) : null;
+  if (!session || Date.now() > session.expiresAt) {
+    if (cookies.admin_session) adminSessions.delete(cookies.admin_session);
+    jsonResponse(res, 401, { error: 'Unauthorized' });
+    return false;
+  }
+  if (!session.roles.includes(ADMIN_ROLE)) {
+    jsonResponse(res, 403, { error: 'Forbidden: super admin required' });
+    return false;
+  }
+  return true;
 }
 
 async function keycloakAdminGet(path) {
@@ -338,6 +379,37 @@ async function keycloakAdminRequest(method, path, body) {
     method, bodyStr,
     { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
   );
+}
+
+// Keycloak Groups là realm-level (không cần clientUuid như client-role trước đây).
+async function listGroups() {
+  const r = await keycloakAdminGet('/groups');
+  let parsed;
+  try { parsed = JSON.parse(r.body); } catch (_) { parsed = null; }
+  return Array.isArray(parsed) ? parsed.map(g => ({ id: g.id, name: g.name })) : [];
+}
+
+async function createGroup(name) {
+  return keycloakAdminRequest('POST', '/groups', { name });
+}
+
+async function deleteGroupById(groupId) {
+  return keycloakAdminRequest('DELETE', `/groups/${groupId}`, null);
+}
+
+async function getGroupMembers(groupId) {
+  const r = await keycloakAdminGet(`/groups/${groupId}/members`);
+  let parsed;
+  try { parsed = JSON.parse(r.body); } catch (_) { parsed = null; }
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+async function addUserToGroup(userId, groupId) {
+  return keycloakAdminRequest('PUT', `/users/${userId}/groups/${groupId}`, null);
+}
+
+async function removeUserFromGroup(userId, groupId) {
+  return keycloakAdminRequest('DELETE', `/users/${userId}/groups/${groupId}`, null);
 }
 
 http.createServer(async (req, res) => {
@@ -368,6 +440,7 @@ http.createServer(async (req, res) => {
       response_type: 'code',
       scope: 'openid',
       state,
+      prompt: 'login',
     });
     res.writeHead(302, { 'Location': `${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/auth?${params}` });
     res.end();
@@ -386,8 +459,7 @@ http.createServer(async (req, res) => {
     });
     if (state) adminLoginStates.delete(state);
     if (!code || !state || !stateExpiry || Date.now() > stateExpiry) {
-      res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end('<html><body><h2>Đăng nhập thất bại: state không hợp lệ hoặc đã hết hạn.</h2></body></html>');
+      renderAdminAuthError(res, 400, 'Đăng nhập thất bại: state không hợp lệ hoặc đã hết hạn.');
       return;
     }
     try {
@@ -403,19 +475,16 @@ http.createServer(async (req, res) => {
       const tokenData = JSON.parse(tokenResult.body);
       console.log('[admin/auth/callback DEBUG] token exchange', { status: tokenResult.status, body: tokenResult.body });
       if (!tokenData.access_token) {
-        res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end('<html><body><h2>Đăng nhập thất bại.</h2></body></html>');
+        renderAdminAuthError(res, 400, 'Đăng nhập thất bại.');
         return;
       }
 
       const introspection = await introspectToken(tokenData.access_token, ADMIN_CLIENT_ID, ADMIN_CLIENT_SECRET);
       const roles = getRolesFromPayload(introspection, ADMIN_CLIENT_ID);
-      if (!introspection.active || !roles.includes(ADMIN_ROLE)) {
-        const logoutUrl = buildKeycloakLogoutUrl('/admin/login');
-        res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(`<html><body><h2>Tài khoản không có quyền quản trị.</h2>
-          <p><a href="${logoutUrl}">Đăng xuất tài khoản hiện tại và thử lại</a></p>
-          </body></html>`);
+      // Cho vào admin UI nếu có ÍT NHẤT 1 trong 3 role admin-tier (admin tối cao,
+      // quản trị người dùng, quản trị máy trạm) — không chỉ riêng admin tối cao.
+      if (!introspection.active || !roles.some(r => ADMIN_TIER_ROLES.includes(r))) {
+        renderAdminAuthError(res, 403, 'Tài khoản không có quyền quản trị.');
         return;
       }
 
@@ -432,8 +501,8 @@ http.createServer(async (req, res) => {
       });
       res.end();
     } catch (err) {
-      res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end('<html><body><h2>Lỗi đăng nhập: ' + err.message + '</h2></body></html>');
+      console.error('[admin/auth/callback] lỗi đăng nhập:', err);
+      renderAdminAuthError(res, 500, 'Đăng nhập thất bại do lỗi hệ thống.');
     }
     return;
   }
@@ -462,9 +531,8 @@ http.createServer(async (req, res) => {
     return;
   }
 
-  // ── Admin API (requires auth) ─────────────────────────────────────────────
+  // ── Admin API (mỗi route tự kiểm tra tier qua requireAdminAuth/requireSuperAdmin) ──
   if (p.startsWith('/admin/api/')) {
-    if (!requireAdminAuth(req, res)) return;
     const raw = await readBody(req);
     let body = {};
     try { if (raw) body = JSON.parse(raw); } catch (_) {}
@@ -472,20 +540,27 @@ http.createServer(async (req, res) => {
     // ── Users ─────────────────────────────────────────────────────────────
 
     if (req.method === 'GET' && p === '/admin/api/users') {
+      if (!requireAdminAuth(req, res, [ADMIN_ROLE_USERS])) return;
       try {
         const usersRes = await keycloakAdminGet('/users?max=200');
         const users = JSON.parse(usersRes.body);
-        const uuid = await getClientUuid();
-        const withRoles = await Promise.all(users.map(async u => {
+        const adminUuid = await getClientUuid(ADMIN_CLIENT_ID);
+        const enriched = await Promise.all(users.map(async u => {
+          let groups = [];
+          let adminRoles = [];
           try {
-            const rolesRes = await keycloakAdminGet(`/users/${u.id}/role-mappings/clients/${uuid}`);
-            const roles = JSON.parse(rolesRes.body).map(r => r.name);
-            return { ...u, roles };
-          } catch (_) {
-            return { ...u, roles: [] };
-          }
+            const groupsRes = await keycloakAdminGet(`/users/${u.id}/groups`);
+            const gp = JSON.parse(groupsRes.body);
+            if (Array.isArray(gp)) groups = gp.map(g => g.name);
+          } catch (_) {}
+          try {
+            const rolesRes = await keycloakAdminGet(`/users/${u.id}/role-mappings/clients/${adminUuid}`);
+            const rp = JSON.parse(rolesRes.body);
+            if (Array.isArray(rp)) adminRoles = rp.map(r => r.name);
+          } catch (_) {}
+          return { ...u, groups, adminRoles };
         }));
-        jsonResponse(res, 200, withRoles);
+        jsonResponse(res, 200, enriched);
       } catch (err) {
         jsonResponse(res, 500, { error: err.message });
       }
@@ -493,6 +568,7 @@ http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && p === '/admin/api/users') {
+      if (!requireAdminAuth(req, res, [ADMIN_ROLE_USERS])) return;
       const { username, email, firstName, lastName, password } = body;
       if (!username || !password) {
         jsonResponse(res, 400, { error: 'username và password là bắt buộc' });
@@ -523,16 +599,47 @@ http.createServer(async (req, res) => {
       return;
     }
 
-    const userRolesMatch = p.match(/^\/admin\/api\/users\/([^/]+)\/roles$/);
-    if (userRolesMatch) {
-      const userId = userRolesMatch[1];
+    // Gán/gỡ user khỏi Group (machine-access) — thay cho route role cũ
+    const userGroupsMatch = p.match(/^\/admin\/api\/users\/([^/]+)\/groups$/);
+    if (userGroupsMatch) {
+      if (!requireAdminAuth(req, res, [ADMIN_ROLE_USERS])) return;
+      const userId = userGroupsMatch[1];
+      const groupIds = Array.isArray(body.groupIds) ? body.groupIds : [];
       try {
-        const uuid = await getClientUuid();
         if (req.method === 'POST') {
-          await keycloakAdminRequest('POST', `/users/${userId}/role-mappings/clients/${uuid}`, body.roles);
+          await Promise.all(groupIds.map(gid => addUserToGroup(userId, gid)));
           jsonResponse(res, 200, { ok: true });
         } else if (req.method === 'DELETE') {
-          await keycloakAdminRequest('DELETE', `/users/${userId}/role-mappings/clients/${uuid}`, body.roles);
+          await Promise.all(groupIds.map(gid => removeUserFromGroup(userId, gid)));
+          jsonResponse(res, 200, { ok: true });
+        } else {
+          jsonResponse(res, 405, { error: 'Method not allowed' });
+        }
+      } catch (err) {
+        jsonResponse(res, 500, { error: err.message });
+      }
+      return;
+    }
+
+    // Gán/gỡ role admin-tier (admin/manage_users/manage_machines) trên rocky-admin —
+    // chỉ admin tối cao, để tránh leo thang quyền.
+    const userAdminRolesMatch = p.match(/^\/admin\/api\/users\/([^/]+)\/admin-roles$/);
+    if (userAdminRolesMatch) {
+      if (!requireSuperAdmin(req, res)) return;
+      const userId = userAdminRolesMatch[1];
+      const names = Array.isArray(body.roles) ? body.roles : [];
+      try {
+        const uuid = await getClientUuid(ADMIN_CLIENT_ID);
+        const allRolesRes = await keycloakAdminGet(`/clients/${uuid}/roles`);
+        const allRoles = JSON.parse(allRolesRes.body);
+        const roleObjs = (Array.isArray(allRoles) ? allRoles : [])
+          .filter(r => names.includes(r.name))
+          .map(r => ({ id: r.id, name: r.name }));
+        if (req.method === 'POST') {
+          await keycloakAdminRequest('POST', `/users/${userId}/role-mappings/clients/${uuid}`, roleObjs);
+          jsonResponse(res, 200, { ok: true });
+        } else if (req.method === 'DELETE') {
+          await keycloakAdminRequest('DELETE', `/users/${userId}/role-mappings/clients/${uuid}`, roleObjs);
           jsonResponse(res, 200, { ok: true });
         } else {
           jsonResponse(res, 405, { error: 'Method not allowed' });
@@ -545,6 +652,7 @@ http.createServer(async (req, res) => {
 
     const userEnabledMatch = p.match(/^\/admin\/api\/users\/([^/]+)\/enabled$/);
     if (userEnabledMatch && req.method === 'PUT') {
+      if (!requireAdminAuth(req, res, [ADMIN_ROLE_USERS])) return;
       const userId = userEnabledMatch[1];
       try {
         await keycloakAdminRequest('PUT', `/users/${userId}`, { enabled: body.enabled });
@@ -557,6 +665,7 @@ http.createServer(async (req, res) => {
 
     const userDeleteMatch = p.match(/^\/admin\/api\/users\/([^/]+)$/);
     if (userDeleteMatch && req.method === 'DELETE') {
+      if (!requireAdminAuth(req, res, [ADMIN_ROLE_USERS])) return;
       const userId = userDeleteMatch[1];
       try {
         const r = await keycloakAdminRequest('DELETE', `/users/${userId}`, null);
@@ -571,50 +680,94 @@ http.createServer(async (req, res) => {
       return;
     }
 
-    // ── Keycloak roles CRUD ───────────────────────────────────────────────
+    // ── Groups (Keycloak Group thật + mapping máy↔group ở SQLite) ─────────
 
-    if (p === '/admin/api/keycloak-roles') {
-      if (req.method === 'GET') {
-        try {
-          const uuid = await getClientUuid();
-          const r = await keycloakAdminGet(`/clients/${uuid}/roles`);
-          const parsed = JSON.parse(r.body);
-          if (!Array.isArray(parsed)) { jsonResponse(res, 200, []); return; }
-          const roles = parsed.map(r => ({ id: r.id, name: r.name }));
-          jsonResponse(res, 200, roles);
-        } catch (err) {
-          jsonResponse(res, 500, { error: err.message });
-        }
-        return;
+    if (req.method === 'GET' && p === '/admin/api/groups') {
+      if (!requireAdminAuth(req, res, [ADMIN_ROLE_USERS, ADMIN_ROLE_MACHINES])) return;
+      let kcGroupsList = [];
+      let kcError = null;
+      try {
+        kcGroupsList = await listGroups();
+      } catch (err) {
+        kcError = err.message;
+        // Fallback: dùng tên group từ local mapping (không có id Keycloak)
+        kcGroupsList = Object.keys(getGroupsMap()).map(name => ({ id: null, name }));
       }
-      if (req.method === 'POST') {
-        const name = body.name && body.name.trim();
-        if (!name) { jsonResponse(res, 400, { error: 'Thiếu name' }); return; }
-        try {
-          const uuid = await getClientUuid();
-          const r = await keycloakAdminRequest('POST', `/clients/${uuid}/roles`, { name });
-          if (r.status === 201) {
-            jsonResponse(res, 200, { ok: true });
-          } else {
-            let errMsg = r.body;
-            try { const e = JSON.parse(r.body); errMsg = e.errorMessage || e.error || r.body; } catch (_) {}
-            jsonResponse(res, r.status, { error: errMsg });
-          }
-        } catch (err) {
-          jsonResponse(res, 500, { error: err.message });
+
+      const groupsMap = getGroupsMap();
+      const allMachinesById = new Map(getAllMachines().map(m => [m.id, m]));
+      const groupDetails = await Promise.all(kcGroupsList.map(async kcGroup => {
+        const machine_ids = groupsMap[kcGroup.name] || [];
+        const machines = machine_ids
+          .map(id => allMachinesById.get(id))
+          .filter(Boolean)
+          .map(m => ({ id: m.id, alias: m.alias, rustdesk_id: m.rustdesk_id }));
+
+        let users = [];
+        if (!kcError && kcGroup.id) {
+          try {
+            const members = await getGroupMembers(kcGroup.id);
+            users = members.map(u => ({
+              id:        u.id,
+              username:  u.username,
+              firstName: u.firstName || '',
+              lastName:  u.lastName  || '',
+              email:     u.email     || '',
+            }));
+          } catch (_) {}
         }
-        return;
-      }
+
+        return { id: kcGroup.id, name: kcGroup.name, machine_ids, machines, users };
+      }));
+
+      jsonResponse(res, 200, { groups: groupDetails, kcError });
+      return;
     }
 
-    const kcRoleDelMatch = p.match(/^\/admin\/api\/keycloak-roles\/([^/]+)$/);
-    if (kcRoleDelMatch && req.method === 'DELETE') {
-      const roleName = decodeURIComponent(kcRoleDelMatch[1]);
+    if (req.method === 'POST' && p === '/admin/api/groups') {
+      if (!requireSuperAdmin(req, res)) return;
+      const name = body.name && body.name.trim();
+      if (!name) { jsonResponse(res, 400, { error: 'Thiếu name' }); return; }
       try {
-        const uuid = await getClientUuid();
-        const delRes = await keycloakAdminRequest('DELETE', `/clients/${uuid}/roles/${encodeURIComponent(roleName)}`, null);
+        const r = await createGroup(name);
+        if (r.status === 201) {
+          jsonResponse(res, 200, { ok: true });
+        } else {
+          let errMsg = r.body;
+          try { const e = JSON.parse(r.body); errMsg = e.errorMessage || e.error || r.body; } catch (_) {}
+          jsonResponse(res, r.status, { error: errMsg });
+        }
+      } catch (err) {
+        jsonResponse(res, 500, { error: err.message });
+      }
+      return;
+    }
+
+    if (req.method === 'PUT' && p === '/admin/api/groups') {
+      if (!requireAdminAuth(req, res, [ADMIN_ROLE_MACHINES])) return;
+      // body: { groupName: [machineIds], ... }
+      for (const [groupName, ids] of Object.entries(body)) {
+        if (!Array.isArray(ids)) continue;
+        setGroupMachineIds(groupName, ids);
+      }
+      jsonResponse(res, 200, { ok: true });
+      return;
+    }
+
+    const groupDeleteMatch = p.match(/^\/admin\/api\/groups\/([^/]+)$/);
+    if (groupDeleteMatch && req.method === 'DELETE') {
+      if (!requireSuperAdmin(req, res)) return;
+      const groupId = decodeURIComponent(groupDeleteMatch[1]);
+      try {
+        let groupName = null;
+        try {
+          const groups = await listGroups();
+          const target = groups.find(g => g.id === groupId);
+          if (target) groupName = target.name;
+        } catch (_) {}
+        const delRes = await deleteGroupById(groupId);
         if (delRes.status === 204 || delRes.status === 200) {
-          deleteRoleMapping(roleName);
+          if (groupName) deleteGroupMapping(groupName);
           jsonResponse(res, 200, { ok: true });
         } else {
           jsonResponse(res, delRes.status, { error: delRes.body });
@@ -625,87 +778,29 @@ http.createServer(async (req, res) => {
       return;
     }
 
-    // ── Roles (enriched: name + machine_ids + machines + users) ──────────
-
-    if (req.method === 'GET' && p === '/admin/api/roles') {
-      let kcRolesList = [];
-      let kcError = null;
-      let clientUuid = null;
-
-      try {
-        clientUuid = await getClientUuid();
-        const kcRes = await keycloakAdminGet(`/clients/${clientUuid}/roles`);
-        const parsed = JSON.parse(kcRes.body);
-        kcRolesList = Array.isArray(parsed) ? parsed : [];
-      } catch (err) {
-        kcError = err.message;
-        // Fallback: dùng tên role từ local data
-        kcRolesList = Object.keys(getRolesMap()).map(name => ({ name }));
-      }
-
-      const rolesMap = getRolesMap();
-      const allMachinesById = new Map(getAllMachines().map(m => [m.id, m]));
-      const roleDetails = await Promise.all(kcRolesList.map(async kcRole => {
-        const machine_ids = rolesMap[kcRole.name] || [];
-        const machines = machine_ids
-          .map(id => allMachinesById.get(id))
-          .filter(Boolean)
-          .map(m => ({ id: m.id, alias: m.alias, rustdesk_id: m.rustdesk_id }));
-
-        let users = [];
-        if (!kcError && clientUuid) {
-          try {
-            const usersRes = await keycloakAdminGet(`/clients/${clientUuid}/roles/${encodeURIComponent(kcRole.name)}/users`);
-            const p2 = JSON.parse(usersRes.body);
-            if (Array.isArray(p2)) {
-              users = p2.map(u => ({
-                id:        u.id,
-                username:  u.username,
-                firstName: u.firstName || '',
-                lastName:  u.lastName  || '',
-                email:     u.email     || '',
-              }));
-            }
-          } catch (_) {}
-        }
-
-        return { name: kcRole.name, machine_ids, machines, users };
-      }));
-
-      jsonResponse(res, 200, { roles: roleDetails, kcError });
-      return;
-    }
-
-    if (req.method === 'PUT' && p === '/admin/api/roles') {
-      // body: { roleName: [machineIds], ... }
-      for (const [roleName, ids] of Object.entries(body)) {
-        if (!Array.isArray(ids)) continue;
-        setRoleMachineIds(roleName, ids);
-      }
-      jsonResponse(res, 200, { ok: true });
-      return;
-    }
-
     // ── Machines CRUD ─────────────────────────────────────────────────────
 
     if (req.method === 'GET' && p === '/admin/api/machines') {
+      if (!requireAdminAuth(req, res, [ADMIN_ROLE_MACHINES])) return;
       jsonResponse(res, 200, getAllMachines());
       return;
     }
 
     if (req.method === 'POST' && p === '/admin/api/machines') {
+      if (!requireAdminAuth(req, res, [ADMIN_ROLE_MACHINES])) return;
       const id = insertMachine({
         alias:       (body.alias       || '').trim(),
         rustdesk_id: (body.rustdesk_id || '').trim(),
         note:        (body.note        || '').trim(),
       });
-      if (Array.isArray(body.roles)) setMachineRoles(id, body.roles);
+      if (Array.isArray(body.groups)) setMachineGroups(id, body.groups);
       jsonResponse(res, 200, { ok: true, id });
       return;
     }
 
     const machineMatch = p.match(/^\/admin\/api\/machines\/([^/]+)$/);
     if (machineMatch) {
+      if (!requireAdminAuth(req, res, [ADMIN_ROLE_MACHINES])) return;
       const mid = decodeURIComponent(machineMatch[1]);
 
       if (req.method === 'PUT') {
@@ -715,7 +810,7 @@ http.createServer(async (req, res) => {
           note:        body.note        !== undefined ? String(body.note).trim()        : undefined,
         });
         if (!updated) { jsonResponse(res, 404, { error: 'Machine not found' }); return; }
-        if (Array.isArray(body.roles)) setMachineRoles(mid, body.roles);
+        if (Array.isArray(body.groups)) setMachineGroups(mid, body.groups);
         jsonResponse(res, 200, { ok: true });
         return;
       }
@@ -845,11 +940,11 @@ http.createServer(async (req, res) => {
       res.end(JSON.stringify({ allowed: false, reason: 'login_required' }));
       return;
     }
-    // Đã login → kiểm tra role
-    const userRoles = getRolesFromPayload(payload);
-    const allowedIds = getMachinesForRoles(userRoles).map(m => m.id);
+    // Đã login → kiểm tra group
+    const userGroups = getGroupsFromPayload(payload);
+    const allowedIds = getMachinesForGroups(userGroups).map(m => m.id);
     const allowed = allowedIds.includes(machine.id);
-    console.log(`[check-access] rustdesk_id=${rustdesk_id} roles=${userRoles} allowed=${allowed}`);
+    console.log(`[check-access] rustdesk_id=${rustdesk_id} groups=${userGroups} allowed=${allowed}`);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ allowed, reason: allowed ? null : 'no_permission' }));
     return;
@@ -859,8 +954,15 @@ http.createServer(async (req, res) => {
     const authHeader = req.headers['authorization'] || '';
     const token = authHeader.replace(/^Bearer\s+/i, '');
     const payload = decodeJwtPayload(token);
-    const roles = getRolesFromPayload(payload);
-    const machines = getMachinesForRoles(roles);
+    const groups = getGroupsFromPayload(payload);
+    const machines = getMachinesForGroups(groups);
+    // DEBUG tạm — gỡ sau khi xác nhận claim "groups" + mapping SQLite đúng.
+    console.log('[address-books DEBUG]', {
+      rawGroupsClaim: payload.groups,
+      normalizedGroups: groups,
+      groupsMapInDb: getGroupsMap(),
+      machinesReturned: machines.map(m => m.id),
+    });
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ machines }));
     return;

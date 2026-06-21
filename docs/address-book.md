@@ -5,7 +5,7 @@
 Address Book trong ROCKY là một **hybrid** giữa cơ chế gốc của RustDesk và một lớp tích hợp Keycloak/gateway riêng:
 
 - **Data model + API ghi** (`Ab`/`AbEntry`/`AbPeer`, `POST /api/ab`) vẫn dùng cơ chế gốc RustDesk.
-- **Nguồn dữ liệu đọc** (danh sách máy + tag hiển thị) đã chuyển sang gateway tự build (`server.js`), lấy theo **role Keycloak** của user đang đăng nhập, dữ liệu mapping role↔máy lưu ở `data/rocky.db` (xem `docs/admin-ui.md`).
+- **Nguồn dữ liệu đọc** (danh sách máy + tag hiển thị) đã chuyển sang gateway tự build (`server.js`), lấy theo **Keycloak Group** của user đang đăng nhập (đọc từ claim `groups` trong JWT — trước đây là client-role trên `rustdesk-client`, đã đổi hẳn sang Group, xem Change Log), dữ liệu mapping group↔máy lưu ở `data/rocky.db` (xem `docs/admin-ui.md`).
 - **Kiểm soát truy cập trước khi connect** (`check_access_blocking`) là một lớp kiểm tra mềm phía Rust, gọi thẳng gateway, **fail-open** khi lỗi mạng.
 
 Có 2 cầu nối giao tiếp độc lập, không lồng vào nhau:
@@ -70,12 +70,12 @@ sequenceDiagram
     Rust->>Rust: LocalConfig::set_option (lưu mã hoá)
 
     TIS->>GW: POST /api/address-books (Bearer token)
-    GW->>GW: decodeJwtPayload(token) → roles
-    GW->>DB: SELECT machines JOIN machine_roles WHERE role IN (roles)
+    GW->>GW: decodeJwtPayload(token) → claim "groups" → getGroupsFromPayload()
+    GW->>DB: SELECT machines JOIN machine_groups WHERE group_name IN (groups)
     DB-->>GW: machines[]
     GW-->>TIS: { machines: [...] }
 
-    TIS->>TIS: ab.tags = roles distinct<br/>ab.peers = machines
+    TIS->>TIS: ab.tags = groups distinct<br/>ab.peers = machines
     TIS->>TIS: app.update() → render SessionList
     TIS-->>User: Hiển thị danh sách Address Book
 ```
@@ -118,8 +118,8 @@ sequenceDiagram
                 GW-->>Rust: { allowed: false, reason: "login_required" }
                 Rust-->>TIS: "Bạn cần đăng nhập để kết nối máy này"
             else Có token
-                GW->>GW: roles = getRolesFromPayload(payload)
-                GW->>DB: SELECT machines JOIN machine_roles WHERE role IN (roles)
+                GW->>GW: groups = getGroupsFromPayload(payload)
+                GW->>DB: SELECT machines JOIN machine_groups WHERE group_name IN (groups)
                 DB-->>GW: allowedIds
                 alt machine.id thuộc allowedIds
                     GW-->>Rust: { allowed: true }
@@ -193,4 +193,63 @@ sequenceDiagram
 
 ## Change Log
 
+- **2026-06-21 (fix cấu hình Keycloak — claim `groups` rỗng/sai)** — Sau khi áp dụng
+  redesign role→Group (entry ngay dưới), test thật trên Keycloak vẫn bị
+  `POST /api/address-books` trả `machinesReturned: []` dù mapping group↔máy trong
+  `data/rocky.db` đã đúng (`groupsMapInDb` có sẵn `phong-ke-toan`/`phong-nhan-su` với
+  đúng machine_id). Đây là lỗi **cấu hình Keycloak**, không phải bug code — debug bằng
+  log tạm có sẵn ở `server.js` (`[address-books DEBUG]`, in `payload.groups` thô trước
+  khi qua `getGroupsFromPayload`), lần theo 2 bước:
+  1. **Lần đầu**: `rawGroupsClaim` ra 3 default realm role
+     (`offline_access`, `default-roles-rustdesk`, `uma_authorization`) thay vì tên
+     Group. Nguyên nhân: protocol mapper gắn Token Claim Name `groups` trên
+     `rustdesk-client` đang là **Mapper Type "User Realm Role"** (mapping role) chứ
+     không phải **"Group Membership"** (mapping group) — tên claim đặt đúng `groups`
+     nhưng loại mapper sai nên lấy nhầm nguồn dữ liệu.
+  2. **Sau khi đổi đúng Mapper Type "Group Membership"**: `rawGroupsClaim` lại ra
+     `undefined` — claim biến mất hoàn toàn khỏi access token dù mọi toggle
+     "Add to access token"/"Add to ID token"/"Add to userinfo" đều đã On. Root cause
+     thật: trong form cấu hình mapper, ô **"Token Claim Name" bị để trống**. Field
+     **"Name"** (đã điền `groups`) chỉ là tên hiển thị của mapper trong Keycloak admin
+     console — **không** quyết định tên key trong JWT; phải điền riêng
+     **"Token Claim Name" = `groups`** thì claim mới thực sự xuất hiện trong token.
+     Đây là 1 nhầm lẫn dễ gặp vì 2 field "Name" và "Token Claim Name" đứng cạnh nhau,
+     cùng kiểu input text, không có gợi ý rõ field nào quyết định claim key thật.
+  **Fix:** điền `Token Claim Name = groups`, tắt **Full group path** (đổi On → Off, để
+  khớp chuẩn hoá ở `getGroupsFromPayload` — claim trả `phong-ke-toan` thẳng thay vì
+  `/phong-ke-toan`), giữ nguyên `Add to access token = On`. Không đổi code. Đã verify:
+  đăng nhập lại → `rawGroupsClaim` ra đúng tên group user thuộc → `machinesReturned`
+  có dữ liệu.
+  **Checklist cho lần setup Keycloak tiếp theo** (server mới/máy khác): khi tạo mapper
+  "Group Membership" trên `rustdesk-client-dedicated`, luôn kiểm tra đủ 2 điều kiện —
+  (a) Mapper Type đúng là "Group Membership" (không phải "User/Client Role"), và
+  (b) ô "Token Claim Name" có giá trị `groups` (không để trống) — thiếu 1 trong 2 đều
+  khiến `/api/address-books` và `/api/check-access` luôn coi user không thuộc group nào.
+
+- **2026-06-21 (redesign phân quyền)** — Chuyển nguồn machine-access từ **Keycloak
+  client-role trên `rustdesk-client`** sang **Keycloak Group** (realm-level), theo plan
+  `.claude/plans/t-i-c-n-m-t-m-iridescent-goose.md` (chi tiết đầy đủ + sequence diagram
+  ở `docs/admin-ui.md`). Thay đổi cụ thể liên quan tới luồng trong file này:
+  - `server.js`: `getRolesFromPayload(payload)` → `getGroupsFromPayload(payload)` (đọc
+    claim **`groups`** trong JWT thay vì `realm_access`/`resource_access` roles — cần
+    thêm protocol mapper "Group Membership" trên `rustdesk-client`, Token Claim Name
+    `groups`, Full group path OFF, Add to access token ON; gateway tự strip 1 dấu `/`
+    đầu để chuẩn hoá phòng trường hợp Keycloak vẫn trả full path). `getMachinesForRoles`
+    → `getMachinesForGroups`, bảng SQLite `machine_roles` → `machine_groups`. Áp dụng
+    cho cả `/api/check-access` và `/api/address-books`.
+  - `ab.tis` (`getAddressBooks()`, 2 dòng): `m.roles` → `m.groups` khi đọc field từ
+    response của `/api/address-books`. **Quyết định phạm vi:** giữ nguyên label UI
+    "Tags"/"Add Tag"/"Edit Tag" — đây là khái niệm tag chung có sẵn của RustDesk, không
+    phải chữ "Role", nên không cần đổi để khớp ngữ nghĩa "Group".
+  - `src/ui.rs` (`check_access_blocking`), `src/ui/index.tis` (`createNewConnect`),
+    `src/ui_interface.rs`, `src/common.rs`: **không đổi gì** — đã xác nhận khi rà soát
+    là các lớp này chỉ forward bearer token + đọc field `allowed`/`reason` (boolean/
+    string chung), không tự đọc field `roles`/`groups` nào, nên hoàn toàn trung lập với
+    việc đổi ngữ nghĩa phía gateway từ role sang group.
+  - Không giữ song song cơ chế role cũ — chuyển hẳn 100% sang Group theo quyết định đã
+    chốt với user (dữ liệu role↔máy cũ chỉ là demo, không cần bảo toàn).
+  - 4 rủi ro đã ghi nhận ở mục "Rủi ro tổng hợp" bên dưới (JWT không verify signature,
+    fail-open của `check_access_blocking`, revoke logout không đảm bảo, race
+    `ASYNC_JOB_STATUS`) **không đổi** — đổi role→group không ảnh hưởng các rủi ro này,
+    vẫn nguyên trạng.
 - **2026-06-19** — Tạo file này để ghi lại các luồng Address Book/Auth (login Keycloak, hiển thị AB, check-access trước khi connect, logout) đã được giải thích và vẽ sequence diagram trong quá trình rà soát code. Không có thay đổi code — chỉ tổng hợp tài liệu + 4 rủi ro phát hiện được khi đọc kỹ `ab.tis`/`ui.rs`/`server.js`/`ui_interface.rs`.
