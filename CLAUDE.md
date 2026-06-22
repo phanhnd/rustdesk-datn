@@ -240,6 +240,14 @@ Cloud-synced contact list tied to a user account. Requires login (`access_token`
 - Sau khi hoàn thành bất kỳ task nào (thêm tính năng, sửa bug, thay đổi luồng), cập nhật phần liên quan trong `CLAUDE.md`.
 - Nếu task liên quan đến nghiệp vụ đặc thù của một module cụ thể (ví dụ: Address Book, File Transfer, Remote Session...), tạo file `docs/<module>.md` riêng mô tả: mục đích, luồng xử lý, các hàm/file chính, và những thay đổi đã thực hiện.
 - Mỗi file `docs/<module>.md` nên có cấu trúc: **Overview** → **Key Files** → **Flow** → **Change Log** (ghi ngắn gọn từng thay đổi theo thứ tự thời gian).
+- Mỗi sequence diagram (mermaid) thêm vào mục **Flow** của `docs/<module>.md` phải được
+  đồng bộ thêm vào [`docs/sequenceDiagram.md`](docs/sequenceDiagram.md) (file tổng hợp
+  toàn bộ sequence diagram của project, để xem nhanh không cần mở từng file module).
+  File module vẫn là nguồn chính; `docs/sequenceDiagram.md` chỉ là bản gom — sửa ở nguồn
+  trước rồi copy lại.
+- Tương tự, mỗi class diagram (mermaid) mô tả data model (struct Rust, schema SQLite,
+  entity Keycloak...) phải được đồng bộ thêm vào
+  [`docs/classDiagram.md`](docs/classDiagram.md) theo cùng nguyên tắc trên.
 
 ## Rebrand: ROCKY + Navy/Teal Theme
 
