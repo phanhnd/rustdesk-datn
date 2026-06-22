@@ -189,7 +189,15 @@ function getMachinesForGroups(groupNames) {
   return attachGroups(rows);
 }
 
+const SESSION_TTL_MS = 10 * 60 * 1000; // sessions Map entries stale after this if abandoned mid-flow
 const sessions = new Map();
+
+function sweepStaleSessions() {
+  const now = Date.now();
+  for (const [code, s] of sessions) {
+    if (now - s.createdAt > SESSION_TTL_MS) sessions.delete(code);
+  }
+}
 
 function readBody(req) {
   return new Promise((resolve) => {
@@ -258,16 +266,6 @@ async function getClientUuid(clientId = CLIENT_ID) {
   return clients[0].id;
 }
 
-function decodeJwtPayload(token) {
-  const parts = token.split('.');
-  if (parts.length < 2) return {};
-  try {
-    return JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
-  } catch (_) {
-    return {};
-  }
-}
-
 function getRolesFromPayload(payload, clientId = CLIENT_ID) {
   const roles = [];
   if (payload.realm_access && Array.isArray(payload.realm_access.roles)) {
@@ -296,6 +294,31 @@ async function introspectToken(token, clientId, clientSecret) {
   const introspectUrl = `${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/token/introspect`;
   const result = await httpPost(introspectUrl, body);
   return JSON.parse(result.body);
+}
+
+// Cache kết quả introspect theo token để tránh gọi Keycloak trên mỗi lần connect-click /
+// AB refresh — check_access_blocking (Rust) có budget 800ms cho cả round-trip
+// Rust→gateway→Keycloak. TTL ngắn để token bị revoke vẫn bị từ chối trong khoảng thời
+// gian hợp lý.
+const INTROSPECTION_CACHE_TTL_MS = 30 * 1000;
+const introspectionCache = new Map(); // token -> { active, payload, cachedUntil }
+
+async function introspectTokenCached(token) {
+  const cached = introspectionCache.get(token);
+  if (cached && Date.now() < cached.cachedUntil) return cached;
+
+  let entry;
+  try {
+    const result = await introspectToken(token, CLIENT_ID, CLIENT_SECRET);
+    entry = { active: !!result.active, payload: result, cachedUntil: Date.now() + INTROSPECTION_CACHE_TTL_MS };
+  } catch (err) {
+    // Keycloak không phản hồi được → coi token KHÔNG active (fail-closed riêng bước
+    // verify này). Không cache lỗi tạm thời — request kế tiếp thử lại ngay.
+    console.error('Token introspection failed:', err.message);
+    return { active: false, payload: {}, cachedUntil: 0 };
+  }
+  introspectionCache.set(token, entry);
+  return entry;
 }
 
 function buildKeycloakLogoutUrl(postLogoutPath) {
@@ -833,6 +856,7 @@ http.createServer(async (req, res) => {
   if (req.method === 'POST' && p === '/api/auth/logout') {
     const authHeader = req.headers['authorization'] || '';
     const token = authHeader.replace(/^Bearer\s+/i, '');
+    let revoked = true; // không có token = không có gì để revoke, không tính là fail
     if (token) {
       const body = querystring.stringify({
         client_id: CLIENT_ID,
@@ -841,15 +865,22 @@ http.createServer(async (req, res) => {
         token_type_hint: 'access_token',
       });
       const revokeUrl = `${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/revoke`;
-      try { await httpPost(revokeUrl, body); } catch (err) {
+      try {
+        const result = await httpPost(revokeUrl, body);
+        revoked = result.status >= 200 && result.status < 300;
+        if (!revoked) console.error('Token revoke failed: HTTP', result.status, result.body);
+      } catch (err) {
+        revoked = false;
         console.error('Token revoke failed:', err.message);
       }
+      introspectionCache.delete(token); // tránh token vừa logout vẫn "active" trong cache tới hết TTL
     }
-    jsonResponse(res, 200, { ok: true });
+    jsonResponse(res, 200, { ok: true, revoked });
     return;
   }
 
   if (req.method === 'POST' && p === '/api/auth/init') {
+    sweepStaleSessions();
     const session_code = crypto.randomBytes(16).toString('hex');
     const params = new URLSearchParams({
       client_id: CLIENT_ID,
@@ -860,7 +891,7 @@ http.createServer(async (req, res) => {
       prompt: 'login',
     });
     const url = `${KEYCLOAK_URL}/realms/${REALM}/protocol/openid-connect/auth?${params}`;
-    sessions.set(session_code, { pending: true });
+    sessions.set(session_code, { pending: true, createdAt: Date.now() });
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ url, session_code }));
     return;
@@ -869,6 +900,7 @@ http.createServer(async (req, res) => {
   if (req.method === 'GET' && p === '/api/auth/callback') {
     const { code, state } = parsed.query;
     if (!code || !state) { res.writeHead(400); res.end('Missing code or state'); return; }
+    const createdAt = (sessions.get(state) || {}).createdAt || Date.now();
     try {
       const body = querystring.stringify({
         grant_type: 'authorization_code',
@@ -881,16 +913,16 @@ http.createServer(async (req, res) => {
       const result = await httpPost(tokenUrl, body);
       const tokenData = JSON.parse(result.body);
       if (tokenData.access_token) {
-        sessions.set(state, { access_token: tokenData.access_token, pending: false });
+        sessions.set(state, { access_token: tokenData.access_token, pending: false, createdAt });
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end('<html><body><h2>Login thành công, đóng tab này.</h2></body></html>');
       } else {
-        sessions.set(state, { pending: false, error: tokenData.error_description || 'Token exchange failed' });
+        sessions.set(state, { pending: false, error: tokenData.error_description || 'Token exchange failed', createdAt });
         res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end('<html><body><h2>Login thất bại.</h2></body></html>');
       }
     } catch (err) {
-      sessions.set(state, { pending: false, error: err.message });
+      sessions.set(state, { pending: false, error: err.message, createdAt });
       res.writeHead(500); res.end('Token exchange error');
     }
     return;
@@ -934,14 +966,19 @@ http.createServer(async (req, res) => {
       return;
     }
     // Máy thuộc hệ thống → bắt buộc phải login
-    const payload = token ? decodeJwtPayload(token) : null;
-    if (!payload) {
+    if (!token) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ allowed: false, reason: 'login_required' }));
+      return;
+    }
+    const introspection = await introspectTokenCached(token);
+    if (!introspection.active) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ allowed: false, reason: 'login_required' }));
       return;
     }
     // Đã login → kiểm tra group
-    const userGroups = getGroupsFromPayload(payload);
+    const userGroups = getGroupsFromPayload(introspection.payload);
     const allowedIds = getMachinesForGroups(userGroups).map(m => m.id);
     const allowed = allowedIds.includes(machine.id);
     console.log(`[check-access] rustdesk_id=${rustdesk_id} groups=${userGroups} allowed=${allowed}`);
@@ -952,13 +989,13 @@ http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && p === '/api/address-books') {
     const authHeader = req.headers['authorization'] || '';
-    const token = authHeader.replace(/^Bearer\s+/i, '');
-    const payload = decodeJwtPayload(token);
-    const groups = getGroupsFromPayload(payload);
-    const machines = getMachinesForGroups(groups);
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+    const introspection = token ? await introspectTokenCached(token) : { active: false, payload: {} };
+    const groups = introspection.active ? getGroupsFromPayload(introspection.payload) : [];
+    const machines = introspection.active ? getMachinesForGroups(groups) : [];
     // DEBUG tạm — gỡ sau khi xác nhận claim "groups" + mapping SQLite đúng.
     console.log('[address-books DEBUG]', {
-      rawGroupsClaim: payload.groups,
+      rawGroupsClaim: introspection.payload.groups,
       normalizedGroups: groups,
       groupsMapInDb: getGroupsMap(),
       machinesReturned: machines.map(m => m.id),

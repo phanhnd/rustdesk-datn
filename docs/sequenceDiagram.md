@@ -45,7 +45,7 @@ sequenceDiagram
 
     User->>TIS: Click "Login"
     TIS->>GW: POST /api/auth/init
-    GW->>GW: sinh session_code, sessions.set(pending:true)
+    GW->>GW: sweepStaleSessions() (dọn session quá 10 phút)<br/>sinh session_code, sessions.set(pending:true, createdAt:now)
     GW-->>TIS: { url, session_code }
     TIS->>Rust: handler.open_url(url)
     Rust->>BR: mở trình duyệt hệ thống
@@ -73,7 +73,7 @@ sequenceDiagram
     Rust->>Rust: LocalConfig::set_option (lưu mã hoá)
 
     TIS->>GW: POST /api/address-books (Bearer token)
-    GW->>GW: decodeJwtPayload(token) → claim "groups" → getGroupsFromPayload()
+    GW->>GW: introspectTokenCached(token) → verify active+exp qua Keycloak (cache 30s)<br/>→ claim "groups" → getGroupsFromPayload()
     GW->>DB: SELECT machines JOIN machine_groups WHERE group_name IN (groups)
     DB-->>GW: machines[]
     GW-->>TIS: { machines: [...] }
@@ -84,8 +84,9 @@ sequenceDiagram
 ```
 
 Điểm chú ý (chi tiết đầy đủ ở file gốc): `BR` và `TIS` là 2 tiến trình tách biệt, chỉ nối
-qua `session_code`; Rust chỉ tham gia ở `open_url` và lưu token; `decodeJwtPayload` không
-verify chữ ký JWT.
+qua `session_code` (entry tự dọn sau 10 phút nếu bỏ ngang, `sweepStaleSessions()`); Rust
+chỉ tham gia ở `open_url` và lưu token; `introspectTokenCached` verify chữ ký + `exp` thật
+qua Keycloak (đã fix 2026-06-22, thay `decodeJwtPayload` cũ).
 
 ---
 
@@ -119,12 +120,12 @@ sequenceDiagram
             Rust-->>TIS: "" (cho qua)
         else Máy có trong DB
             DB-->>GW: machine
-            GW->>GW: decodeJwtPayload(token)
-            alt Không có token hợp lệ
+            GW->>GW: introspectTokenCached(token)
+            alt Không có token / token không active (giả, hết hạn, đã revoke)
                 GW-->>Rust: { allowed: false, reason: "login_required" }
                 Rust-->>TIS: "Bạn cần đăng nhập để kết nối máy này"
-            else Có token
-                GW->>GW: groups = getGroupsFromPayload(payload)
+            else Token active (verify qua Keycloak)
+                GW->>GW: groups = getGroupsFromPayload(introspection.payload)
                 GW->>DB: SELECT machines JOIN machine_groups WHERE group_name IN (groups)
                 DB-->>GW: allowedIds
                 alt machine.id thuộc allowedIds
@@ -176,20 +177,23 @@ sequenceDiagram
     TIS->>TIS: app.update() → UI chuyển về nút "Login" NGAY
 
     alt token không rỗng
-        TIS->>GW: POST /api/auth/logout<br/>Authorization: Bearer token<br/>(fire-and-forget, callback rỗng)
+        TIS->>GW: POST /api/auth/logout<br/>Authorization: Bearer token<br/>(fire-and-forget, log warning nếu revoked:false)
         GW->>KC: POST /protocol/openid-connect/revoke<br/>{ client_id, client_secret, token }
-        alt revoke thành công
+        alt revoke thành công (HTTP 2xx)
             KC-->>GW: 200
-        else revoke lỗi
-            KC--xGW: lỗi
-            GW->>GW: console.error("Token revoke failed") — chỉ log, không báo lỗi cho client
+            GW->>GW: revoked = true
+        else revoke lỗi (HTTP lỗi hoặc network error)
+            KC--xGW: lỗi / status != 2xx
+            GW->>GW: revoked = false<br/>console.error("Token revoke failed", ...)
         end
-        GW-->>TIS: { ok: true }  (luôn trả 200 dù revoke lỗi)
+        GW->>GW: introspectionCache.delete(token)
+        GW-->>TIS: { ok: true, revoked }
     end
 ```
 
 Điểm chú ý: thứ tự thật là xoá state local → cập nhật UI ngay → mới gửi POST logout; server
-luôn trả `{ok:true}` dù revoke ở Keycloak thất bại (silent failure).
+giờ trả `revoked` đúng thực tế (đã fix 2026-06-22, thay vì luôn `{ok:true}` bất kể revoke
+thành công hay không), kèm xoá token khỏi `introspectionCache` ngay khi logout.
 
 ---
 
@@ -528,6 +532,11 @@ sẵn trong "Valid post logout redirect URIs" của client `rocky-admin`, không
 
 ## Change Log
 
+- **2026-06-22 (fix 3 lỗ hổng auth gateway)** — Đồng bộ lại diagram #1 (Login), #2
+  (Check-access), #3 (Logout) từ `docs/address-book.md` sau khi fix: `decodeJwtPayload`
+  (không verify) → `introspectTokenCached` (verify thật qua Keycloak, cache 30s) ở #1/#2;
+  `/api/auth/logout` trả `revoked` đúng thực tế + xoá cache token ở #3. Chi tiết đầy đủ +
+  lý do ở Change Log của `docs/address-book.md`.
 - **2026-06-21 (bổ sung quản trị máy trạm + logout)** — Thêm diagram #9 (quản trị máy
   trạm: tạo/sửa+gán group/xoá máy) và #10 (đăng xuất Admin UI), rà soát trực tiếp từ
   `server.js`/`public/admin.html` — **chưa đồng bộ ngược lại `docs/admin-ui.md`** (lưu ý

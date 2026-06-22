@@ -62,6 +62,8 @@
   .btn-primary:hover { background: var(--accent-2); }
   .btn-danger  { background: var(--danger-strong); color: white; }
   .btn-danger:hover  { background: #a82020; }
+  .btn-warning { background: #F59E0B; color: white; }
+  .btn-warning:hover { background: #D97706; }
   .btn-outline { background: var(--surface); color: var(--accent); border: 1.5px solid var(--accent); }
   .btn-outline:hover { background: var(--surface-2); }
   .btn-sm { padding: 5px 11px; font-size: .82rem; }
@@ -154,13 +156,6 @@
   .modal-box input:focus, .modal-box select:focus { border-color: var(--accent); }
   .modal-footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
 
-  /* Create-user section */
-  .create-user-section {
-    background: var(--surface); border-radius: 8px; padding: 16px 20px; margin-bottom: 20px;
-    box-shadow: 0 1px 6px rgba(22,35,79,.08);
-  }
-  .create-user-section h3 { font-size: .95rem; color: var(--accent); margin-bottom: 12px; }
-
   /* Role card extras */
   .role-section-label {
     font-size: .8rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase;
@@ -218,18 +213,8 @@
     <div class="tab active" id="tab-users">
       <h2>Danh sách người dùng (Keycloak)</h2>
 
-      <div class="create-user-section">
-        <h3>+ Tạo người dùng mới</h3>
-        <div class="form-row">
-          <input id="nu-username"  placeholder="Username *"    style="width:130px">
-          <input id="nu-firstname" placeholder="Tên"           style="width:110px">
-          <input id="nu-lastname"  placeholder="Họ"            style="width:110px">
-          <input id="nu-email"     placeholder="Email"         style="width:180px">
-          <input id="nu-password"  type="password" placeholder="Mật khẩu *" style="width:130px">
-          <button class="btn btn-primary btn-sm" onclick="createUser()">Tạo</button>
-        </div>
-        <div id="create-user-err" style="color:var(--danger);font-size:.83rem;display:none"></div>
-      </div>
+      <button class="btn btn-primary btn-sm" id="show-create-user-btn" style="margin-bottom:16px"
+        onclick="openCreateUserForm()">+ Tạo người dùng mới</button>
 
       <div id="users-content"><div class="loading">Đang tải...</div></div>
     </div>
@@ -281,6 +266,12 @@ let allMachines = [];   // [{id, alias, rustdesk_id, note}]
 let groupDetails = [];  // [{id, name, machine_ids, machines, users}]
 let allUsers    = [];   // [{id, username, firstName, lastName, email, groups, adminRoles}]
 let myAdminRoles = [];  // role admin-tier của chính người đang đăng nhập (admin/manage_users/manage_machines)
+
+const ADMIN_TIERS = [
+  { name: 'admin',           label: 'Admin tối cao' },
+  { name: 'manage_users',    label: 'Quản trị người dùng và phân quyền' },
+  { name: 'manage_machines', label: 'Quản trị máy trạm' },
+];
 
 // ── Auth ───────────────────────────────────────────────────────────────────
 async function checkSession() {
@@ -352,12 +343,39 @@ async function loadAll() {
 }
 
 // ── Users ──────────────────────────────────────────────────────────────────
-async function createUser() {
+function openCreateUserForm() {
+  const dialog = document.createElement('div');
+  dialog.className = 'modal-overlay';
+  dialog.id = 'create-user-modal';
+  dialog.innerHTML = `
+    <div class="modal-box" style="min-width:420px">
+      <h3>+ Tạo người dùng mới</h3>
+      <div class="form-row">
+        <input id="nu-username"  placeholder="Username *"    style="width:130px">
+        <input id="nu-firstname" placeholder="Tên"           style="width:110px">
+        <input id="nu-lastname"  placeholder="Họ"            style="width:110px">
+        <input id="nu-email"     placeholder="Email"         style="width:180px">
+        <input id="nu-password"  type="password" placeholder="Mật khẩu *" style="width:130px">
+      </div>
+      <div id="create-user-extra" style="margin-bottom:14px"></div>
+      <div id="create-user-err" style="color:var(--danger);font-size:.83rem;display:none"></div>
+      <div class="modal-footer">
+        <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">Huỷ</button>
+        <button class="btn btn-primary" onclick="createUser(this)">Tạo</button>
+      </div>
+    </div>`;
+  document.body.appendChild(dialog);
+  renderCreateUserExtra();
+}
+
+async function createUser(btn) {
   const username  = document.getElementById('nu-username').value.trim();
   const firstName = document.getElementById('nu-firstname').value.trim();
   const lastName  = document.getElementById('nu-lastname').value.trim();
   const email     = document.getElementById('nu-email').value.trim();
   const password  = document.getElementById('nu-password').value;
+  const groupIds  = [...document.querySelectorAll('#create-user-extra input.cu-group-cb:checked')].map(c => c.value);
+  const roleNames = [...document.querySelectorAll('#create-user-extra input.cu-role-cb:checked')].map(c => c.value);
   const errEl = document.getElementById('create-user-err');
   errEl.style.display = 'none';
   if (!username || !password) {
@@ -365,6 +383,7 @@ async function createUser() {
     errEl.style.display = 'block';
     return;
   }
+  btn.disabled = true;
   try {
     const r = await fetch('/admin/api/users', {
       method: 'POST',
@@ -375,14 +394,25 @@ async function createUser() {
     if (!r.ok) {
       errEl.textContent = 'Lỗi: ' + (data.error || r.status);
       errEl.style.display = 'block';
+      btn.disabled = false;
       return;
     }
-    ['nu-username','nu-firstname','nu-lastname','nu-email','nu-password']
-      .forEach(id => { document.getElementById(id).value = ''; });
-    await loadUsers();
+    if (groupIds.length)
+      await fetch(`/admin/api/users/${data.id}/groups`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupIds }),
+      });
+    if (roleNames.length)
+      await fetch(`/admin/api/users/${data.id}/admin-roles`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roles: roleNames }),
+      });
+    document.getElementById('create-user-modal').remove();
+    await Promise.all([loadUsers(), loadGroups()]);
   } catch (e) {
     errEl.textContent = 'Lỗi: ' + e.message;
     errEl.style.display = 'block';
+    btn.disabled = false;
   }
 }
 
@@ -399,7 +429,7 @@ async function loadUsers() {
       <div class="tbl-wrap">
       <table>
         <thead><tr>
-          <th>Username</th><th>Tên</th><th>Email</th><th>Groups</th><th>Trạng thái</th><th>Thao tác</th>
+          <th>Username</th><th>Tên</th><th>Email</th><th>Groups</th><th>Role</th><th>Trạng thái</th><th>Thao tác</th>
         </tr></thead>
         <tbody>
           ${users.map(u => {
@@ -410,6 +440,7 @@ async function loadUsers() {
               <td>${esc(fullName)}</td>
               <td>${esc(u.email || '—')}</td>
               <td>${renderUserGroups(u)}</td>
+              <td>${renderUserRoles(u)}</td>
               <td>${u.enabled
                 ? '<span class="badge badge-green">Active</span>'
                 : '<span class="badge badge-red">Disabled</span>'}</td>
@@ -418,7 +449,7 @@ async function loadUsers() {
                   onclick="openGroupAssignEditor('${u.id}','${esc(u.username)}')">Gán group</button>
                 ${isSuperAdmin() ? `<button class="btn btn-outline btn-sm" style="margin-left:4px"
                   onclick="openAdminTierEditor('${u.id}','${esc(u.username)}')">Gán admin-tier</button>` : ''}
-                <button class="btn btn-sm ${u.enabled ? 'btn-danger' : 'btn-primary'}" style="margin-left:4px"
+                <button class="btn btn-sm ${u.enabled ? 'btn-warning' : 'btn-primary'}" style="margin-left:4px"
                   onclick="toggleUser('${u.id}', ${!u.enabled}, this)">${u.enabled ? 'Vô hiệu hoá' : 'Kích hoạt'}</button>
                 <button class="btn btn-danger btn-sm" style="margin-left:4px"
                   onclick="deleteUser('${u.id}','${esc(u.username)}')">Xoá</button>
@@ -436,6 +467,43 @@ function renderUserGroups(u) {
   const groups = u.groups || [];
   if (!groups.length) return '<span class="badge badge-gray">—</span>';
   return groups.map(g => `<span class="badge badge-blue">${esc(g)}</span>`).join('');
+}
+
+function renderUserRoles(u) {
+  const roles = u.adminRoles || [];
+  if (!roles.length) return '<span class="badge badge-gray">—</span>';
+  return roles.map(r => {
+    const tier = ADMIN_TIERS.find(t => t.name === r);
+    return `<span class="badge badge-blue">${esc(tier ? tier.label : r)}</span>`;
+  }).join('');
+}
+
+function renderCreateUserExtra() {
+  const el = document.getElementById('create-user-extra');
+  if (!el) return;
+  const groupsHtml = kcGroups.length
+    ? kcGroups.map(g => `
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer">
+          <input type="checkbox" class="cu-group-cb" value="${esc(g.id)}" style="width:16px;height:16px;accent-color:var(--accent)">
+          <span>${esc(g.name)}</span>
+        </label>`).join('')
+    : '<span style="color:var(--text-muted);font-size:.85rem">Chưa có group nào.</span>';
+
+  const rolesHtml = isSuperAdmin() ? `
+    <div style="margin-bottom:14px">
+      <label style="display:block;font-size:.85rem;color:var(--text-muted);margin:0 0 6px">Role admin-tier</label>
+      ${ADMIN_TIERS.map(t => `
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer">
+          <input type="checkbox" class="cu-role-cb" value="${t.name}" style="width:16px;height:16px;accent-color:var(--accent)">
+          <span>${esc(t.label)}</span>
+        </label>`).join('')}
+    </div>` : '';
+
+  el.innerHTML = `${rolesHtml}
+    <div>
+      <label style="display:block;font-size:.85rem;color:var(--text-muted);margin:0 0 6px">Group được phép truy cập máy</label>
+      ${groupsHtml}
+    </div>`;
 }
 
 async function toggleUser(id, enable, btn) {
@@ -519,11 +587,6 @@ async function saveGroupAssignment(userId, btn) {
 function openAdminTierEditor(userId, username) {
   const user = allUsers.find(u => u.id === userId) || {};
   const currentAdminRoles = user.adminRoles || [];
-  const tiers = [
-    { name: 'admin',           label: 'Admin tối cao' },
-    { name: 'manage_users',    label: 'Quản trị người dùng và phân quyền' },
-    { name: 'manage_machines', label: 'Quản trị máy trạm' },
-  ];
 
   const dialog = document.createElement('div');
   dialog.className = 'modal-overlay';
@@ -531,7 +594,7 @@ function openAdminTierEditor(userId, username) {
     <div class="modal-box" style="min-width:340px">
       <h3>Quyền admin-tier của <em>${esc(username)}</em></h3>
       <div style="margin-bottom:18px">
-        ${tiers.map(t => `
+        ${ADMIN_TIERS.map(t => `
           <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer">
             <input type="checkbox" value="${t.name}"
               ${currentAdminRoles.includes(t.name) ? 'checked' : ''}
@@ -610,7 +673,7 @@ function renderGroupDeleteChips() {
       </span>`).join('');
 }
 
-// ── Groups (card view) ──────────────────────────────────────────────────────
+// ── Groups (table view) ─────────────────────────────────────────────────────
 async function loadGroups() {
   const el = document.getElementById('groups-content');
   el.innerHTML = '<div class="loading">Đang tải...</div>';
@@ -645,13 +708,18 @@ async function loadGroups() {
       el.innerHTML = warningHtml + '<div class="empty">Chưa có group nào. Tạo group ở trên.</div>';
       return;
     }
-    el.innerHTML = warningHtml + groupDetails.map(group => renderGroupCard(group)).join('');
+    el.innerHTML = warningHtml + `
+      <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Group</th><th>Chi tiết</th></tr></thead>
+        <tbody>${groupDetails.map(group => renderGroupRow(group)).join('')}</tbody>
+      </table></div>`;
   } catch (e) {
     el.innerHTML = `<div class="empty" style="color:var(--danger)">Lỗi kết nối: ${esc(e.message)}</div>`;
   }
 }
 
-function renderGroupCard(group) {
+function renderGroupRow(group) {
   const users    = group.users    || [];
   const machines = group.machines || [];
 
@@ -682,26 +750,29 @@ function renderGroupCard(group) {
     : '<span style="color:var(--text-muted);font-size:.85rem">Chưa có máy nào.</span>';
 
   return `
-    <div class="card">
-      <div class="card-header">
-        <h3>${esc(group.name)}</h3>
-        ${isSuperAdmin() ? `<button class="btn btn-danger btn-sm" onclick="deleteGroup('${esc(group.id)}','${esc(group.name)}')">Xoá group</button>` : ''}
-      </div>
+    <tr>
+      <td style="white-space:nowrap;vertical-align:top">
+        <strong>${esc(group.name)}</strong>
+        ${isSuperAdmin() ? `<div style="margin-top:8px">
+          <button class="btn btn-danger btn-sm" onclick="deleteGroup('${esc(group.id)}','${esc(group.name)}')">Xoá group</button>
+        </div>` : ''}
+      </td>
+      <td>
+        <div class="role-section-label">
+          Người dùng (${users.length})
+          ${canManageUsers() ? `<button class="btn btn-outline btn-sm" style="margin-left:10px;font-size:.78rem"
+            onclick="openAddUserToGroup('${esc(group.id)}')">+ Thêm user</button>` : ''}
+        </div>
+        <div style="margin-bottom:12px">${usersHtml}</div>
 
-      <div class="role-section-label">
-        Người dùng (${users.length})
-        ${canManageUsers() ? `<button class="btn btn-outline btn-sm" style="margin-left:10px;font-size:.78rem"
-          onclick="openAddUserToGroup('${esc(group.id)}')">+ Thêm user</button>` : ''}
-      </div>
-      <div style="margin-bottom:12px">${usersHtml}</div>
-
-      <div class="role-section-label">
-        Máy được truy cập (${machines.length})
-        ${canManageMachines() ? `<button class="btn btn-outline btn-sm" style="margin-left:10px;font-size:.78rem"
-          onclick="openAddMachineToGroup('${esc(group.name)}')">+ Thêm máy</button>` : ''}
-      </div>
-      <div>${machinesHtml}</div>
-    </div>`;
+        <div class="role-section-label">
+          Máy được truy cập (${machines.length})
+          ${canManageMachines() ? `<button class="btn btn-outline btn-sm" style="margin-left:10px;font-size:.78rem"
+            onclick="openAddMachineToGroup('${esc(group.name)}')">+ Thêm máy</button>` : ''}
+        </div>
+        <div>${machinesHtml}</div>
+      </td>
+    </tr>`;
 }
 
 async function openAddMachineToGroup(groupName) {

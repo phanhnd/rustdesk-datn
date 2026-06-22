@@ -42,7 +42,7 @@ sequenceDiagram
 
     User->>TIS: Click "Login"
     TIS->>GW: POST /api/auth/init
-    GW->>GW: sinh session_code, sessions.set(pending:true)
+    GW->>GW: sweepStaleSessions() (dọn session quá 10 phút)<br/>sinh session_code, sessions.set(pending:true, createdAt:now)
     GW-->>TIS: { url, session_code }
     TIS->>Rust: handler.open_url(url)
     Rust->>BR: mở trình duyệt hệ thống
@@ -70,7 +70,7 @@ sequenceDiagram
     Rust->>Rust: LocalConfig::set_option (lưu mã hoá)
 
     TIS->>GW: POST /api/address-books (Bearer token)
-    GW->>GW: decodeJwtPayload(token) → claim "groups" → getGroupsFromPayload()
+    GW->>GW: introspectTokenCached(token) → verify active+exp qua Keycloak (cache 30s)<br/>→ claim "groups" → getGroupsFromPayload()
     GW->>DB: SELECT machines JOIN machine_groups WHERE group_name IN (groups)
     DB-->>GW: machines[]
     GW-->>TIS: { machines: [...] }
@@ -81,9 +81,9 @@ sequenceDiagram
 ```
 
 Điểm chú ý:
-- `BR` (tab browser) và `TIS` (app Sciter) là 2 tiến trình tách biệt, chỉ nối qua `session_code` lưu tạm trong `sessions` Map (in-memory) của `server.js`.
+- `BR` (tab browser) và `TIS` (app Sciter) là 2 tiến trình tách biệt, chỉ nối qua `session_code` lưu tạm trong `sessions` Map (in-memory) của `server.js`. Entry tự dọn sau 10 phút nếu bị bỏ ngang (`sweepStaleSessions()`, đã fix 2026-06-22 — trước đó sống mãi nếu user đóng app/tab giữa lúc redirect Keycloak).
 - `Rust` chỉ tham gia ở 2 chỗ: mở browser (`open_url`) và lưu token (`set_local_option`) — không gọi `auth/init`, `auth/status`, `address-books`.
-- `decodeJwtPayload` chỉ decode base64url phần payload, **không verify chữ ký JWT** (`server.js:253`) — risk nếu gateway lộ ra mạng không tin cậy.
+- `introspectTokenCached(token)` verify chữ ký + `exp` thật qua Keycloak `/token/introspect` (đã fix — xem Change Log 2026-06-22), kết quả cache theo token tối đa 30s (`INTROSPECTION_CACHE_TTL_MS`) để tránh round-trip Keycloak trên mỗi request.
 
 ### 2. Check-access trước khi connect (đồng bộ, blocking, gọi từ Rust)
 
@@ -113,12 +113,12 @@ sequenceDiagram
             Rust-->>TIS: "" (cho qua)
         else Máy có trong DB
             DB-->>GW: machine
-            GW->>GW: decodeJwtPayload(token)
-            alt Không có token hợp lệ
+            GW->>GW: introspectTokenCached(token)
+            alt Không có token / token không active (giả, hết hạn, đã revoke)
                 GW-->>Rust: { allowed: false, reason: "login_required" }
                 Rust-->>TIS: "Bạn cần đăng nhập để kết nối máy này"
-            else Có token
-                GW->>GW: groups = getGroupsFromPayload(payload)
+            else Token active (verify qua Keycloak)
+                GW->>GW: groups = getGroupsFromPayload(introspection.payload)
                 GW->>DB: SELECT machines JOIN machine_groups WHERE group_name IN (groups)
                 DB-->>GW: allowedIds
                 alt machine.id thuộc allowedIds
@@ -143,7 +143,8 @@ sequenceDiagram
 
 Điểm chú ý:
 - **Đồng bộ, blocking**: `check_access_blocking` chạy `reqwest::blocking` ngay trong dispatch call — JS chờ Rust chờ HTTP xong mới có kết quả (không async/poll như flow login).
-- **Fail-open ở 2 lớp**: lỗi mạng/parse (Rust side) hoặc máy không tồn tại trong DB (gateway side) → đều cho kết nối luôn. Đây là kiểm soát UI/UX, không phải security boundary đáng tin cậy.
+- **Fail-open ở 2 lớp**: lỗi mạng/parse (Rust side) hoặc máy không tồn tại trong DB (gateway side) → đều cho kết nối luôn. Đây là kiểm soát UI/UX, không phải security boundary đáng tin cậy. (Quyết định giữ nguyên, ngoài phạm vi fix 2026-06-22 — xem Change Log.)
+- **Đổi hành vi từ 2026-06-22**: token rác/giả/hết hạn (cấu trúc JWT đúng nhưng không verify được qua Keycloak) giờ map về `login_required` thay vì `no_permission` như trước (trước đây `decodeJwtPayload` không bao giờ trả falsy cho token không rỗng, nên token rác bị xử lý nhầm thành "đã login nhưng 0 quyền"). `no_permission` giờ chỉ xảy ra khi token thật sự active nhưng user không thuộc group được cấp quyền cho máy đó.
 
 ### 3. Logout
 
@@ -167,31 +168,66 @@ sequenceDiagram
     TIS->>TIS: app.update() → UI chuyển về nút "Login" NGAY
 
     alt token không rỗng
-        TIS->>GW: POST /api/auth/logout<br/>Authorization: Bearer token<br/>(fire-and-forget, callback rỗng)
+        TIS->>GW: POST /api/auth/logout<br/>Authorization: Bearer token<br/>(fire-and-forget, log warning nếu revoked:false)
         GW->>KC: POST /protocol/openid-connect/revoke<br/>{ client_id, client_secret, token }
-        alt revoke thành công
+        alt revoke thành công (HTTP 2xx)
             KC-->>GW: 200
-        else revoke lỗi
-            KC--xGW: lỗi
-            GW->>GW: console.error("Token revoke failed") — chỉ log, không báo lỗi cho client
+            GW->>GW: revoked = true
+        else revoke lỗi (HTTP lỗi hoặc network error)
+            KC--xGW: lỗi / status != 2xx
+            GW->>GW: revoked = false<br/>console.error("Token revoke failed", ...)
         end
-        GW-->>TIS: { ok: true }  (luôn trả 200 dù revoke lỗi)
+        GW->>GW: introspectionCache.delete(token)
+        GW-->>TIS: { ok: true, revoked }
     end
 ```
 
 Điểm chú ý:
 - Thứ tự thật: **(1) xoá state local → (2) `app.update()` chuyển UI về Login NGAY → (3) mới gửi POST logout lên gateway**. UI không chờ response của bước (3); callback success/error đều là hàm rỗng.
-- `if (token)` ở `ab.tis:797` là **defensive check**, không phải nhánh logic hay gặp: nút Logout chỉ render khi đã có `access_token` (`ab.tis:19,57`), và phía server cũng tự `if(token)` tương tự (`server.js:638-639`) — không có token thì cả 2 phía đều không có gì để revoke.
-- Server luôn trả `{ok:true}` dù lệnh `revoke` ở Keycloak thất bại (chỉ `console.error`, không propagate lỗi) → token **có thể vẫn còn hợp lệ ở Keycloak** tới khi tự hết hạn, dù app đã hiển thị như đã logout xong. Đây là rủi ro cần lưu ý nếu cần đảm bảo revoke chắc chắn (nên đọc response status từ Keycloak và báo lỗi lên client nếu revoke fail).
+- `if (token)` ở `ab.tis:797` là **defensive check**, không phải nhánh logic hay gặp: nút Logout chỉ render khi đã có `access_token` (`ab.tis:19,57`), và phía server cũng tự `if(token)` tương tự — không có token thì cả 2 phía đều không có gì để revoke.
+- **Đã fix (2026-06-22)**: server giờ đọc đúng `status` thật từ response revoke của Keycloak (`httpPost` resolve cả khi Keycloak trả 4xx/5xx, chỉ reject lỗi mạng tầng transport — trước đây code chỉ bắt lỗi mạng, không bao giờ phát hiện được Keycloak từ chối revoke) và trả `{ok:true, revoked}` thay vì luôn `{ok:true}`. `ok` vẫn luôn `true` (gateway tự nó xử lý request thành công), `revoked` mới là tín hiệu thật về kết quả ở Keycloak. Đồng thời xoá token khỏi `introspectionCache` ngay khi logout để token không còn được coi là active trong cửa sổ cache (xem mục Rủi ro #1 đã fix). Client (`ab.tis`) vẫn giữ UX optimistic-logout cũ (xoá state + cập nhật UI trước khi gọi API), chỉ thêm 1 dòng `stderr.println` cảnh báo khi `revoked === false`, không chặn/đổi luồng.
 
 ### Rủi ro tổng hợp đã ghi nhận khi rà soát các luồng trên
 
-1. `decodeJwtPayload` không verify JWT signature — chấp nhận mọi token có cấu trúc đúng `header.payload.signature`, dù chữ ký giả (`server.js:253`, áp dụng cho cả `/api/check-access` và `/api/address-books`).
-2. `check_access_blocking` fail-open khi gateway lỗi/offline — chỉ là UX gate, không phải security boundary.
-3. Logout không đảm bảo revoke thành công ở Keycloak (silent failure, xem mục 3 trên).
-4. (Pre-existing, không riêng AB) `ASYNC_JOB_STATUS` trong `src/ui_interface.rs:69,888-894` là **1 biến global duy nhất cho mọi POST request qua `handler.post_request`** (không phân theo URL như GET dùng `ASYNC_HTTP_STATUS: HashMap`). Nếu 2 lệnh `httpRequest()` POST chạy chồng lấp thời gian (ví dụ logout bắn đúng lúc `getAb()`/`updateAb()` cũ đang chờ), 2 vòng poll `check_status()` có thể đọc nhầm kết quả của nhau. Logout không bị ảnh hưởng quan sát được (callback rỗng), nhưng phía bị "ăn nhầm" response có thể parse sai dữ liệu.
+1. ~~`decodeJwtPayload` không verify JWT signature...~~ **ĐÃ FIX (2026-06-22)** — thay bằng `introspectTokenCached()`, verify chữ ký + `exp` thật qua Keycloak `/token/introspect`, cache 30s theo token. Áp dụng cho cả `/api/check-access` và `/api/address-books`. `decodeJwtPayload()` đã bị xoá khỏi `server.js` (hết người gọi).
+2. `check_access_blocking` fail-open khi gateway lỗi/offline — chỉ là UX gate, không phải security boundary. **Chưa fix** — quyết định giữ nguyên, tính năng này được đánh giá là "chưa hoàn thiện", ngoài phạm vi lần rà soát 2026-06-22.
+3. ~~Logout không đảm bảo revoke thành công ở Keycloak...~~ **ĐÃ FIX (2026-06-22)** — `/api/auth/logout` giờ đọc status thật từ response revoke, trả `{ok:true, revoked}` thay vì luôn `{ok:true}`, và xoá token khỏi `introspectionCache` ngay khi logout.
+4. (Pre-existing, không riêng AB) `ASYNC_JOB_STATUS` trong `src/ui_interface.rs:69,888-894` là **1 biến global duy nhất cho mọi POST request qua `handler.post_request`** (không phân theo URL như GET dùng `ASYNC_HTTP_STATUS: HashMap`). Nếu 2 lệnh `httpRequest()` POST chạy chồng lấp thời gian (ví dụ logout bắn đúng lúc `getAb()`/`updateAb()` cũ đang chờ), 2 vòng poll `check_status()` có thể đọc nhầm kết quả của nhau. Logout không bị ảnh hưởng quan sát được (callback rỗng), nhưng phía bị "ăn nhầm" response có thể parse sai dữ liệu. **Chưa fix** — phạm vi rộng (chạm hạ tầng Rust↔Sciter dùng chung 10 nơi gọi, gồm cả luồng ngoài AB), không chọn trong lần rà soát 2026-06-22.
+
+5. **Mới phát hiện + đã fix (2026-06-22, không có trong 4 rủi ro gốc)**: `sessions` Map (`server.js`, dùng cho polling `/api/auth/init` → `/api/auth/status`) không có TTL — user bỏ ngang luồng login (đóng app/tab giữa lúc redirect Keycloak) để lại entry sống mãi trong memory. Đã thêm `SESSION_TTL_MS` (10 phút) + `sweepStaleSessions()` gọi lazy mỗi lần `/api/auth/init`, kèm carry-forward `createdAt` qua các nhánh `sessions.set()` ở `/api/auth/callback` để không sweep nhầm session vừa hoàn tất nhưng chưa được client poll.
 
 ## Change Log
+
+- **2026-06-22 (fix 3 lỗ hổng auth gateway)** — Theo plan
+  `.claude/plans/l-p-k-ho-ch-t-m-ticklish-beaver.md`, fix 3/4 rủi ro đã ghi nhận ở mục
+  "Rủi ro tổng hợp" + 1 rủi ro mới phát hiện cùng lúc rà soát:
+  1. **JWT không verify** (`/api/check-access`, `/api/address-books`): thay
+     `decodeJwtPayload()` (chỉ base64-decode, không verify signature/`exp`) bằng
+     `introspectTokenCached()` — tái dùng `introspectToken()` (verify thật qua Keycloak
+     `/token/introspect`, đã có sẵn cho admin login) + cache 30s theo token
+     (`INTROSPECTION_CACHE_TTL_MS`) để không cộng thêm latency Keycloak vào budget
+     800ms của `check_access_blocking` (Rust). Token rác/giả/hết hạn/đã-bị-revoke giờ
+     nhất quán map về `login_required` (trước đây map nhầm về `no_permission` do
+     `decodeJwtPayload` không bao giờ trả falsy cho token không rỗng). `decodeJwtPayload()`
+     đã bị xoá khỏi `server.js` (hết người gọi sau khi cả 2 call site đổi xong).
+  2. **`sessions` Map leak**: thêm `SESSION_TTL_MS` (10 phút) + `sweepStaleSessions()`,
+     gọi lazy mỗi lần `/api/auth/init` (không dùng `setInterval` — khớp pattern lazy-check
+     có sẵn của `adminSessions`, không có timer nào tồn tại trong file trước đó). Mỗi
+     entry `sessions` giờ có `createdAt`, được carry-forward qua mọi nhánh
+     `sessions.set(state, ...)` ở `/api/auth/callback` để không sweep nhầm session vừa
+     hoàn tất nhưng client chưa poll kịp.
+  3. **Logout silent-fail**: `/api/auth/logout` giờ đọc `status` thật từ response revoke
+     của Keycloak (`httpPost` chỉ reject lỗi mạng tầng transport, không reject khi
+     Keycloak trả 4xx/5xx — đây là lý do code cũ luôn "thành công"), trả
+     `{ok:true, revoked}` thay vì luôn `{ok:true}`, và xoá token khỏi
+     `introspectionCache` ngay khi logout (tránh token vừa revoke vẫn "active" trong
+     cache tới hết 30s TTL — hệ quả trực tiếp của fix 1, không phải fix độc lập).
+     `ab.tis` (`logoutFromKeycloak()`) thêm 1 dòng `stderr.println` cảnh báo khi
+     `revoked === false`, không đổi UX optimistic-logout hiện có.
+  **Ngoài phạm vi, giữ nguyên** (đã chốt với user, xem rủi ro #2 và #4 ở trên):
+  `check_access_blocking` fail-open, `ASYNC_JOB_STATUS` race condition, không thêm
+  refresh-token flow (đã xác nhận token hết hạn không làm văng session remote đang
+  chạy, chỉ ảnh hưởng lần connect/refresh AB tiếp theo — user chấp nhận phải login lại).
 
 - **2026-06-21 (fix cấu hình Keycloak — claim `groups` rỗng/sai)** — Sau khi áp dụng
   redesign role→Group (entry ngay dưới), test thật trên Keycloak vẫn bị

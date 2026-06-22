@@ -796,7 +796,11 @@ function logoutFromKeycloak() {
     app.update();
     if (token) {
         httpRequest("http://localhost:3000/api/auth/logout", #post, {},
-            function(_) {},
+            function(data) {
+                if (data && data.revoked === false) {
+                    stderr.println("Keycloak token revoke failed at logout");
+                }
+            },
             function(_,__) {},
             "Authorization: Bearer " + token
         );

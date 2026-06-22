@@ -208,6 +208,48 @@ sequenceDiagram
 
 ## Change Log
 
+- **2026-06-23** — Tab "Người dùng" (`public/admin.html`):
+  1. Thêm cột **Role** vào bảng users (giữa Groups và Trạng thái), hiển thị nhãn các
+     role admin-tier (`admin`/`manage_users`/`manage_machines`) của từng user qua hàm
+     mới `renderUserRoles()` (mirror `renderUserGroups()`), đọc field `adminRoles` đã có
+     sẵn từ `GET /admin/api/users` — không cần sửa `server.js`.
+  2. Phần "+ Tạo người dùng mới" bọc lại trong `<form id="create-user-form"
+     onsubmit="return false;">` và thêm khung `#create-user-extra` (hàm mới
+     `renderCreateUserExtra()`) cho phép gán Group/Role **ngay lúc tạo user**, thay vì
+     phải tạo xong rồi bấm "Gán group"/"Gán admin-tier" riêng như trước. Nội dung khung
+     phụ thuộc quyền của **người đang đăng nhập**: admin tối cao thấy cả checkbox Role
+     admin-tier + Group; chỉ có `manage_users` thì chỉ thấy checkbox Group (đúng
+     `requireSuperAdmin()` đang gate `/admin/api/users/:id/admin-roles`,
+     `server.js:651`). `createUser()` sau khi tạo user xong gọi nối tiếp 2 endpoint gán
+     Group/Role có sẵn (`POST /admin/api/users/:id/groups`,
+     `POST /admin/api/users/:id/admin-roles`) — không có endpoint mới, không sửa
+     `server.js`.
+  3. Tách 3 dòng label role (`admin`/`manage_users`/`manage_machines`) đang lặp lại
+     thành hằng số chung `ADMIN_TIERS`, dùng ở cả `renderUserRoles()`,
+     `renderCreateUserExtra()` và `openAdminTierEditor()` (trước đó khai báo cục bộ
+     `tiers` riêng trong từng hàm).
+  Plan: `.claude/plans/ch-c-n-ng-qu-n-tranquil-blossom.md`.
+- **2026-06-23 (follow-up)** — 2 chỉnh sửa luồng nhỏ trên cùng tab "Người dùng":
+  1. Form "+ Tạo người dùng mới" đổi từ hiện/ẩn inline trong trang sang **modal thật**
+     (`openCreateUserForm()`, tái dùng đúng pattern `.modal-overlay`/`.modal-box`/
+     `.modal-footer` đang dùng cho các dialog khác như `openGroupAssignEditor`,
+     `openEditMachine`) — bấm "+ Tạo người dùng mới" mở popup giữa màn hình kèm nền tối
+     phía sau, thay vì hiện form ngay trong trang. `createUser(btn)` nay nhận thêm `btn`
+     để disable nút trong lúc gọi API (giống `saveGroupAssignment`/
+     `saveAdminTierAssignment`) và đóng modal (`#create-user-modal`) khi tạo xong. Xoá
+     luôn `toggleCreateUserForm()` và CSS `.create-user-section` không còn dùng.
+  2. Nút "Vô hiệu hoá" đổi màu từ đỏ (`btn-danger`) sang cam (`btn-warning`, class CSS
+     mới — `background:#F59E0B`/hover `#D97706`) để phân biệt rõ với hành động xoá
+     (vẫn `btn-danger`).
+- **2026-06-22** — Tab "Danh sách group" (`public/admin.html`): đổi giao diện danh sách
+  group từ mỗi group 1 `<div class="card">` sang 1 `<tr>` trong 1 `<table>` chung (2 cột:
+  Group / Chi tiết), để đồng bộ trực quan với tab Người dùng/Máy đang dùng `<table>`.
+  Đổi thuần markup/CSS — `renderGroupCard()` đổi tên thành `renderGroupRow()`, phần sinh
+  `usersHtml`/`machinesHtml` và toàn bộ hàm xử lý (`removeUserFromGroup`,
+  `openAddUserToGroup`, `removeMachineFromGroup`, `openAddMachineToGroup`, `deleteGroup`,
+  `putGroupMachines`) giữ nguyên 100% — không có modal mới, không đổi luồng tương tác,
+  user/máy/nút thêm-gỡ vẫn hiển thị sẵn ngay trong dòng group như card cũ. Plan:
+  `.claude/plans/ch-c-n-ng-qu-n-tranquil-blossom.md`.
 - **2026-06-21 (redesign phân quyền)** — Thay 2 mô hình phân quyền đơn-tầng cũ bằng mô
   hình mới theo plan `.claude/plans/t-i-c-n-m-t-m-iridescent-goose.md`:
   1. **Admin UI**: từ 1 role `admin` gate toàn bộ, sang **3 role admin-tier** trên client
