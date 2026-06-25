@@ -260,6 +260,31 @@ const LOGO_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAY
 document.getElementById('brand-logo-login').src = LOGO_DATA_URI;
 document.getElementById('brand-logo-header').src = LOGO_DATA_URI;
 
+// ── API layer ─────────────────────────────────────────────────────────────
+async function apiFetch(method, path, data) {
+  const opts = { method };
+  if (data !== undefined) {
+    opts.headers = { 'Content-Type': 'application/json' };
+    opts.body = JSON.stringify(data);
+  }
+  const r = await fetch(path, opts);
+  const json = await r.json().catch(() => null);
+  return { ok: r.ok, status: r.status, data: json };
+}
+const api = {
+  get:    path         => apiFetch('GET',    path),
+  post:   (path, data) => apiFetch('POST',   path, data),
+  put:    (path, data) => apiFetch('PUT',    path, data),
+  delete: (path, data) => apiFetch('DELETE', path, data),
+};
+
+// ── Utilities ──────────────────────────────────────────────────────────────
+function showError(msg)   { alert('Lỗi: ' + msg); }
+function showSuccess(msg) { /* reserved */ }
+function collectChecked(container, selector) {
+  return [...container.querySelectorAll(selector + ':checked')].map(c => c.value);
+}
+
 // ── State ──────────────────────────────────────────────────────────────────
 let kcGroups    = [];   // [{id, name}]
 let allMachines = [];   // [{id, alias, rustdesk_id, note}]
@@ -276,9 +301,8 @@ const ADMIN_TIERS = [
 // ── Auth ───────────────────────────────────────────────────────────────────
 async function checkSession() {
   try {
-    const r = await fetch('/admin/session');
-    const data = await r.json();
-    if (data.authenticated) {
+    const { data } = await api.get('/admin/session');
+    if (data && data.authenticated) {
       document.getElementById('login-page').style.display = 'none';
       document.getElementById('app').style.display = 'flex';
       document.getElementById('admin-label').textContent = data.username;
@@ -293,8 +317,7 @@ async function checkSession() {
 checkSession();
 
 async function doLogout() {
-  const r = await fetch('/admin/logout', { method: 'POST' });
-  const data = await r.json();
+  const { data } = await api.post('/admin/logout');
   if (data.logoutUrl) {
     location.href = data.logoutUrl;
   } else {
@@ -330,9 +353,8 @@ function esc(s) {
 
 async function fetchGroups() {
   try {
-    const r = await fetch('/admin/api/groups');
-    const d = await r.json();
-    kcGroups = Array.isArray(d.groups) ? d.groups.map(g => ({ id: g.id, name: g.name })) : [];
+    const { data: d } = await api.get('/admin/api/groups');
+    kcGroups = (d && Array.isArray(d.groups)) ? d.groups.map(g => ({ id: g.id, name: g.name })) : [];
   } catch (_) { kcGroups = []; }
 }
 
@@ -385,28 +407,17 @@ async function createUser(btn) {
   }
   btn.disabled = true;
   try {
-    const r = await fetch('/admin/api/users', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, email, firstName, lastName, password }),
-    });
-    const data = await r.json();
-    if (!r.ok) {
-      errEl.textContent = 'Lỗi: ' + (data.error || r.status);
+    const { ok, status, data } = await api.post('/admin/api/users', { username, email, firstName, lastName, password });
+    if (!ok) {
+      errEl.textContent = 'Lỗi: ' + ((data && data.error) || status);
       errEl.style.display = 'block';
       btn.disabled = false;
       return;
     }
     if (groupIds.length)
-      await fetch(`/admin/api/users/${data.id}/groups`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupIds }),
-      });
+      await api.post(`/admin/api/users/${data.id}/groups`, { groupIds });
     if (roleNames.length)
-      await fetch(`/admin/api/users/${data.id}/admin-roles`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roles: roleNames }),
-      });
+      await api.post(`/admin/api/users/${data.id}/admin-roles`, { roles: roleNames });
     document.getElementById('create-user-modal').remove();
     await Promise.all([loadUsers(), loadGroups()]);
   } catch (e) {
@@ -420,9 +431,8 @@ async function loadUsers() {
   const el = document.getElementById('users-content');
   el.innerHTML = '<div class="loading">Đang tải...</div>';
   try {
-    const r = await fetch('/admin/api/users');
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const users = await r.json();
+    const { ok, status, data: users } = await api.get('/admin/api/users');
+    if (!ok) throw new Error('HTTP ' + status);
     allUsers = Array.isArray(users) ? users : [];
     if (!users.length) { el.innerHTML = '<div class="empty">Chưa có user nào.</div>'; return; }
     el.innerHTML = `
@@ -509,11 +519,7 @@ function renderCreateUserExtra() {
 async function toggleUser(id, enable, btn) {
   btn.disabled = true;
   try {
-    await fetch(`/admin/api/users/${id}/enabled`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: enable }),
-    });
+    await api.put(`/admin/api/users/${id}/enabled`, { enabled: enable });
     await loadUsers();
   } catch (e) { alert('Lỗi: ' + e.message); btn.disabled = false; }
 }
@@ -521,16 +527,15 @@ async function toggleUser(id, enable, btn) {
 async function deleteUser(id, username) {
   if (!confirm(`Xoá user "${username}"? Hành động này không thể hoàn tác.`)) return;
   try {
-    const r = await fetch(`/admin/api/users/${id}`, { method: 'DELETE' });
-    if (!r.ok) { const d = await r.json(); alert('Lỗi: ' + (d.error || r.status)); return; }
+    const { ok, status, data: d } = await api.delete(`/admin/api/users/${id}`);
+    if (!ok) { showError((d && d.error) || status); return; }
     await loadUsers();
-  } catch (e) { alert('Lỗi: ' + e.message); }
+  } catch (e) { showError(e.message); }
 }
 
 async function openGroupAssignEditor(userId, username) {
-  const usersRes = await fetch('/admin/api/users');
-  const users = await usersRes.json();
-  const user = users.find(u => u.id === userId) || {};
+  const { data: users } = await api.get('/admin/api/users');
+  const user = (Array.isArray(users) ? users : []).find(u => u.id === userId) || {};
   const currentGroups = user.groups || [];
 
   const groups = Array.isArray(kcGroups) ? kcGroups : [];
@@ -569,15 +574,9 @@ async function saveGroupAssignment(userId, btn) {
   btn.disabled = true;
   try {
     if (toAddIds.length)
-      await fetch(`/admin/api/users/${userId}/groups`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupIds: toAddIds }),
-      });
+      await api.post(`/admin/api/users/${userId}/groups`, { groupIds: toAddIds });
     if (toRemoveIds.length)
-      await fetch(`/admin/api/users/${userId}/groups`, {
-        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupIds: toRemoveIds }),
-      });
+      await api.delete(`/admin/api/users/${userId}/groups`, { groupIds: toRemoveIds });
     dialog.remove();
     await loadUsers();
   } catch (e) { alert('Lỗi: ' + e.message); btn.disabled = false; }
@@ -617,15 +616,9 @@ async function saveAdminTierAssignment(userId, btn) {
   btn.disabled = true;
   try {
     if (checked.length)
-      await fetch(`/admin/api/users/${userId}/admin-roles`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roles: checked }),
-      });
+      await api.post(`/admin/api/users/${userId}/admin-roles`, { roles: checked });
     if (unchecked.length)
-      await fetch(`/admin/api/users/${userId}/admin-roles`, {
-        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roles: unchecked }),
-      });
+      await api.delete(`/admin/api/users/${userId}/admin-roles`, { roles: unchecked });
     dialog.remove();
     await loadUsers();
   } catch (e) { alert('Lỗi: ' + e.message); btn.disabled = false; }
@@ -636,13 +629,8 @@ async function createGroup() {
   const name = document.getElementById('new-group-name').value.trim();
   if (!name) return;
   try {
-    const r = await fetch('/admin/api/groups', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
-    });
-    const data = await r.json();
-    if (!r.ok) { alert('Lỗi: ' + (data.error || r.status)); return; }
+    const { ok, status, data } = await api.post('/admin/api/groups', { name });
+    if (!ok) { showError((data && data.error) || status); return; }
     document.getElementById('new-group-name').value = '';
     await fetchGroups();
     await loadGroups();
@@ -652,13 +640,12 @@ async function createGroup() {
 async function deleteGroup(groupId, groupName) {
   if (!confirm(`Xoá group "${groupName}"? Tất cả user trong group này sẽ bị thu hồi quyền truy cập máy.`)) return;
   try {
-    const r = await fetch(`/admin/api/groups/${encodeURIComponent(groupId)}`, { method: 'DELETE' });
-    const data = await r.json();
-    if (!r.ok) { alert('Lỗi: ' + (data.error || r.status)); return; }
+    const { ok, status, data } = await api.delete(`/admin/api/groups/${encodeURIComponent(groupId)}`);
+    if (!ok) { showError((data && data.error) || status); return; }
     await fetchGroups();
     await loadGroups();
     await loadUsers();
-  } catch (e) { alert('Lỗi: ' + e.message); }
+  } catch (e) { showError(e.message); }
 }
 
 function renderGroupDeleteChips() {
@@ -678,13 +665,11 @@ async function loadGroups() {
   const el = document.getElementById('groups-content');
   el.innerHTML = '<div class="loading">Đang tải...</div>';
   try {
-    const [groupsRes, machinesRes] = await Promise.all([
-      fetch('/admin/api/groups'),
-      fetch('/admin/api/machines'),
+    const [{ data: groupsData }, { data: machinesData }] = await Promise.all([
+      api.get('/admin/api/groups'),
+      api.get('/admin/api/machines'),
     ]);
-    const groupsData = await groupsRes.json();
-    allMachines = await machinesRes.json();
-    if (!Array.isArray(allMachines)) allMachines = [];
+    allMachines = Array.isArray(machinesData) ? machinesData : [];
 
     let warningHtml = '';
     if (groupsData && groupsData.groups !== undefined) {
@@ -837,14 +822,9 @@ async function putGroupMachines(groupName, machineIds) {
   for (const g of groupDetails) {
     mapping[g.name] = g.name === groupName ? machineIds : (g.machine_ids || []);
   }
-  const res = await fetch('/admin/api/groups', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(mapping),
-  });
-  if (!res.ok) {
-    const d = await res.json();
-    throw new Error(d.error || res.status);
+  const { ok, status, data: d } = await api.put('/admin/api/groups', mapping);
+  if (!ok) {
+    throw new Error((d && d.error) || status);
   }
 }
 
@@ -852,14 +832,10 @@ async function putGroupMachines(groupName, machineIds) {
 async function removeUserFromGroup(groupId, userId, username) {
   if (!confirm(`Gỡ user "${username}" khỏi group này?`)) return;
   try {
-    const r = await fetch(`/admin/api/users/${userId}/groups`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ groupIds: [groupId] }),
-    });
-    if (!r.ok) { const d = await r.json(); alert('Lỗi: ' + (d.error || r.status)); return; }
+    const { ok, status, data: d } = await api.delete(`/admin/api/users/${userId}/groups`, { groupIds: [groupId] });
+    if (!ok) { showError((d && d.error) || status); return; }
     await Promise.all([loadGroups(), loadUsers()]);
-  } catch (e) { alert('Lỗi: ' + e.message); }
+  } catch (e) { showError(e.message); }
 }
 
 async function openAddUserToGroup(groupId) {
@@ -869,9 +845,9 @@ async function openAddUserToGroup(groupId) {
 
   let users = allUsers;
   if (!users.length) {
-    const r = await fetch('/admin/api/users');
-    users = await r.json();
-    allUsers = Array.isArray(users) ? users : [];
+    const { data } = await api.get('/admin/api/users');
+    users = Array.isArray(data) ? data : [];
+    allUsers = users;
   }
   const available = users.filter(u => !existingIds.has(u.id));
   if (!available.length) { alert('Tất cả user đã thuộc group này.'); return; }
@@ -909,11 +885,7 @@ async function saveAddUserToGroup(groupId, btn) {
   btn.disabled = true;
   try {
     await Promise.all(selected.map(userId =>
-      fetch(`/admin/api/users/${userId}/groups`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupIds: [groupId] }),
-      })
+      api.post(`/admin/api/users/${userId}/groups`, { groupIds: [groupId] })
     ));
     dialog.remove();
     await Promise.all([loadGroups(), loadUsers()]);
@@ -925,10 +897,9 @@ async function loadMachines() {
   const el = document.getElementById('machines-content');
   el.innerHTML = '<div class="loading">Đang tải...</div>';
   try {
-    const r = await fetch('/admin/api/machines');
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    allMachines = await r.json();
-    if (!Array.isArray(allMachines)) allMachines = [];
+    const { ok, status, data } = await api.get('/admin/api/machines');
+    if (!ok) throw new Error('HTTP ' + status);
+    allMachines = Array.isArray(data) ? data : [];
     if (!allMachines.length) {
       el.innerHTML = '<div class="empty">Chưa có máy nào. Thêm máy ở trên.</div>';
       return;
@@ -972,13 +943,8 @@ async function addMachine() {
     return;
   }
   try {
-    const r = await fetch('/admin/api/machines', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ alias, rustdesk_id, note }),
-    });
-    const data = await r.json();
-    if (!r.ok) { errEl.textContent = 'Lỗi: ' + (data.error || r.status); errEl.style.display = 'block'; return; }
+    const { ok, status, data } = await api.post('/admin/api/machines', { alias, rustdesk_id, note });
+    if (!ok) { errEl.textContent = 'Lỗi: ' + ((data && data.error) || status); errEl.style.display = 'block'; return; }
     ['nm-alias','nm-rustdesk-id','nm-note'].forEach(id => { document.getElementById(id).value = ''; });
     await loadMachines();
   } catch (e) { errEl.textContent = 'Lỗi: ' + e.message; errEl.style.display = 'block'; }
@@ -1031,12 +997,8 @@ async function saveEditMachine(machineId, btn) {
   if (!alias) { alert('Alias là bắt buộc.'); return; }
   btn.disabled = true;
   try {
-    const r = await fetch(`/admin/api/machines/${encodeURIComponent(machineId)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ alias, rustdesk_id, note, groups }),
-    });
-    if (!r.ok) { const d = await r.json(); alert('Lỗi: ' + (d.error || r.status)); btn.disabled = false; return; }
+    const { ok, status, data: d } = await api.put(`/admin/api/machines/${encodeURIComponent(machineId)}`, { alias, rustdesk_id, note, groups });
+    if (!ok) { showError((d && d.error) || status); btn.disabled = false; return; }
     dialog.remove();
     await Promise.all([loadMachines(), loadGroups()]);
   } catch (e) { alert('Lỗi: ' + e.message); btn.disabled = false; }
@@ -1045,10 +1007,10 @@ async function saveEditMachine(machineId, btn) {
 async function deleteMachine(machineId, label) {
   if (!confirm(`Xoá máy "${label}"? Máy cũng sẽ bị xoá khỏi tất cả groups.`)) return;
   try {
-    const r = await fetch(`/admin/api/machines/${encodeURIComponent(machineId)}`, { method: 'DELETE' });
-    if (!r.ok) { const d = await r.json(); alert('Lỗi: ' + (d.error || r.status)); return; }
+    const { ok, status, data: d } = await api.delete(`/admin/api/machines/${encodeURIComponent(machineId)}`);
+    if (!ok) { showError((d && d.error) || status); return; }
     await Promise.all([loadMachines(), loadGroups()]);
-  } catch (e) { alert('Lỗi: ' + e.message); }
+  } catch (e) { showError(e.message); }
 }
 </script>
 </body>

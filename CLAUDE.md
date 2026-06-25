@@ -188,6 +188,11 @@ Cloud-synced contact list tied to a user account. Requires login (`access_token`
 > login, check-access-before-connect, and logout, plus known risks (unverified JWT signature,
 > fail-open access check, silent revoke failure, shared `ASYNC_JOB_STATUS` race) are in
 > [`docs/address-book.md`](docs/address-book.md).
+>
+> **Gateway URL**: `ab.tis` và `src/ui.rs` đọc từ `LocalConfig::get_option("gateway-url")` (thay vì
+> hardcode `localhost:3000`). Hàm `getGatewayUrl()` trong `ab.tis` trả về giá trị này với fallback
+> `http://localhost:3000`. Khi đổi IP: dùng `handler.set_local_option("gateway-url", "http://NEW_IP:3000")`
+> hoặc đặt trong Settings UI.
 
 **Data model** (`libs/hbb_common/src/config.rs`):
 - `Ab` — top-level container: `access_token` + `ab_entries: Vec<AbEntry>`
@@ -332,20 +337,36 @@ Giao diện web quản trị chạy song song trên cùng port với gateway Key
 
 ### Chạy
 ```bash
-node server.js
-# Admin UI: http://192.168.1.16:3000/admin
-# Credentials: admin / admin123
+node gateway/server.js
+# Admin UI: http://localhost:3000/admin
 ```
 
-> Gateway bind `0.0.0.0:3000` (không phải `127.0.0.1`) để client build từ CI/CD trên máy khác kết nối được
-> tới VM. Mọi URL gọi gateway/Keycloak ở phía client (`src/ui.rs`, `src/ui/ab.tis`) và `REDIRECT_URI`/
-> `KEYCLOAK_URL` trong `server.js` đang hardcode địa chỉ VM `192.168.1.16` — đổi địa chỉ VM thì phải sửa
-> đồng bộ ở cả 2 phía (xem `docs/admin-ui.md` Change Log).
+> Gateway bind `0.0.0.0:3000`. **Khi đổi mạng/IP**: chỉ sửa `VM_HOST` trong `.env` (server side) và đặt
+> `gateway-url` trong Settings của app desktop (client side) — không cần sửa source code.
 
-### Kiến trúc
-- **`server.js`** — Node.js gateway, dùng built-ins (`http`, `fs`, `crypto`, `node:sqlite`), không có npm dependencies
-- **`public/admin.html`** — Single-page HTML thuần, **3 tab**: Người dùng / Danh sách group / Danh sách máy
-- **`data/rocky.db`** (tự sinh, SQLite qua `node:sqlite`) — Persistence chính. `data.json` (file cũ) chỉ được đọc **một lần** để migrate dữ liệu lịch sử sang DB nếu bảng `machines` còn rỗng; sau đó không còn được dùng.
+### Kiến trúc (đã module hoá)
+```
+gateway/                  ← toàn bộ Node.js gateway tách biệt khỏi Rust source
+  server.js               Entry point ~22 dòng, wire các module
+  config.js               Đọc .env → export tất cả hằng số (secrets, URLs, TTL)
+  db.js                   SQLite layer — init(), CRUD máy & group mapping
+  keycloak.js             Keycloak API client: token cache, introspect, group/user ops
+  utils.js                HTTP helpers, session stores, auth middleware
+  routes/
+    admin-auth.js         /admin (serve HTML), /admin/login, /admin/auth/callback, /admin/session, /admin/logout
+    admin-api.js          /admin/api/* — users, groups, machines
+    client-api.js         /api/auth/*, /api/check-access, /api/address-books
+  public/
+    admin.html            Single-page Admin UI (3 tab: Users / Groups / Machines)
+  data/
+    rocky.db              SQLite DB (gitignore)
+  .env                    Secrets + host config (gitignore)
+  .env.example            Template để commit
+```
+
+- **`gateway/public/admin.html`** — JS tổ chức thành 7 section rõ ràng; mọi API call đi qua `api.get/post/put/delete()` wrapper.
+- **`gateway/data/rocky.db`** (tự sinh) — Persistence chính. `data.json` (file cũ) chỉ được đọc **một lần** khi migrate; sau đó không dùng nữa.
+- **`gateway/.env`** — Secrets và host config (gitignore); `config.js` load tự động khi khởi động.
 
 ### Phân quyền Admin UI (3 tier trên client Keycloak `rocky-admin`)
 - `admin` — **admin tối cao**: full quyền + duy nhất tạo/xoá Keycloak Group + duy nhất gán/gỡ 3 role admin-tier này cho user khác (`/admin/api/users/:id/admin-roles`).

@@ -3,6 +3,14 @@ var ab = { tags: [], peers: [] };
 var abLoading;
 var abError;
 var abWaitingBrowser = false;
+
+// Đọc gateway URL từ local option "gateway-url"; fallback về localhost:3000.
+// Đổi mạng/IP: gọi handler.set_local_option("gateway-url", "http://NEW_IP:3000") một lần,
+// toàn bộ luồng auth + address-book tự dùng URL mới.
+function getGatewayUrl() {
+    var u = handler.get_local_option("gateway-url");
+    return (u && u != "") ? u : "http://localhost:3000";
+}
 var current_menu_peer_id = '';
 var current_menu_tag = '';
 
@@ -702,7 +710,7 @@ function loginWithKeycloak() {
     abError = "";
     abWaitingBrowser = false;
     app.update();
-    httpRequest("http://localhost:3000/api/auth/init", #post, {}, function(data) {
+    httpRequest(getGatewayUrl() + "/api/auth/init", #post, {}, function(data) {
         if (!data || !data.url) {
             abError = "Không thể kết nối tới cổng xác thực";
             abLoading = false;
@@ -731,7 +739,7 @@ function pollKeycloakAuth(sessionCode, tries) {
     }
     self.timer(2s, function() {
         if (!abWaitingBrowser) return;
-        httpRequest("http://localhost:3000/api/auth/status", #post,
+        httpRequest(getGatewayUrl() + "/api/auth/status", #post,
             { session_code: sessionCode },
             function(data) {
                 if (data && data.access_token) {
@@ -754,7 +762,7 @@ function getAddressBooks() {
     abError = "";
     app.update();
     var token = handler.get_local_option("access_token");
-    httpRequest("http://localhost:3000/api/address-books", #post, {},
+    httpRequest(getGatewayUrl() + "/api/address-books", #post, {},
         function(data) {
             ab.peers = [];
             ab.tags = [];
@@ -795,7 +803,7 @@ function logoutFromKeycloak() {
     ab = { tags: [], peers: [] };
     app.update();
     if (token) {
-        httpRequest("http://localhost:3000/api/auth/logout", #post, {},
+        httpRequest(getGatewayUrl() + "/api/auth/logout", #post, {},
             function(data) {
                 if (data && data.revoked === false) {
                     stderr.println("Keycloak token revoke failed at logout");

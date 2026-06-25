@@ -497,6 +497,10 @@ impl UI {
     fn check_access_blocking(&mut self, rustdesk_id: String) -> String {
         use hbb_common::config::LocalConfig;
         let token = LocalConfig::get_option("access_token");
+        let gateway_url = {
+            let opt = LocalConfig::get_option("gateway-url");
+            if opt.is_empty() { "http://localhost:3000".to_owned() } else { opt }
+        };
         let client = match reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_millis(800))
             .build()
@@ -505,7 +509,7 @@ impl UI {
             Err(_) => return "".to_owned(), // failopen
         };
         let mut builder = client
-            .post("http://localhost:3000/api/check-access")
+            .post(format!("{}/api/check-access", gateway_url))
             .json(&serde_json::json!({ "rustdesk_id": rustdesk_id }));
         if !token.is_empty() {
             builder = builder.header("Authorization", format!("Bearer {}", token));

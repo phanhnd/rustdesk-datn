@@ -4,6 +4,8 @@
 .idea
 .DS_Store
 .env
+gateway/data/
+gateway/data.json
 libsciter-gtk.so
 src/ui/inline.rs
 extractor
