@@ -13,7 +13,7 @@ const disable_account = handler.is_disable_account();
 const disable_settings = handler.is_disable_settings();
 const is_custom_client = handler.is_custom_client();
 const disable_ab = handler.is_disable_ab();
-const hide_server_settings = handler.get_builtin_option("hide-server-settings") == "Y";
+const hide_server_settings = true;
 const hide_proxy_settings = handler.get_builtin_option("hide-proxy-settings") == "Y";
 const hide_websocket_settings = handler.get_builtin_option("hide-websocket-settings") == "Y";
 const hide_stop_service = handler.get_builtin_option("hide-stop-service") == "Y";
