@@ -600,67 +600,76 @@ khác là độc quyền admin tối cao.
 
 Nhóm áp dụng kết hợp **kiểm thử hộp đen (black-box)** ở mức API/HTTP (dùng `curl`/Postman để gọi
 trực tiếp các endpoint của gateway) và **kiểm thử thủ công trên giao diện (manual UI testing)**
-cho 4 chức năng quan trọng nhất của đồ án.
+cho 5 chức năng quan trọng nhất của đồ án.
 
 ### 4.4.1. Chức năng: Đăng nhập SSO qua Keycloak (desktop client)
 
 | Mã TC | Kịch bản | Kết quả mong đợi | Kết quả thực tế |
 |---|---|---|---|
 | TC-01 | Nhấn Login, đăng nhập đúng tài khoản thuộc 1 Keycloak Group có máy | Trình duyệt mở trang KC; sau login, ứng dụng nhận `access_token`, hiển thị đúng danh sách máy theo Group | ✅ Đạt |
-| TC-02 | Đăng nhập tài khoản thuộc Group khác | Chỉ hiển thị các máy được gán cho Group đó | ✅ Đạt |
+| TC-02 | Đăng nhập tài khoản thuộc Group khác | Chỉ hiển thị các máy được gán cho Group đó, không hiển thị máy của Group đầu tiên | ✅ Đạt |
 | TC-03 | Nhấn **Hủy** trong lúc đang chờ xác thực trình duyệt | Dừng polling ngay, quay lại nút Login | ✅ Đạt |
 | TC-04 | Hết thời gian chờ (quá 60 lần poll × 2 giây = 120 giây không xác thực) | Hiển thị lỗi "Login timeout" | ✅ Đạt |
 | TC-05 | Nhấn Đăng xuất | Xóa token cục bộ ngay (UI phản hồi tức thì), gọi `/api/auth/logout` revoke token phía Keycloak | ✅ Đạt |
 | TC-06 | Bỏ ngang luồng login (đóng app giữa lúc redirect Keycloak) | Entry `sessions` Map tự dọn sau 10 phút (`sweepStaleSessions()`), không leak memory vô hạn | ✅ Đạt (đã fix 2026-06-22) |
 
-### 4.4.2. Chức năng: Kiểm soát truy cập trước khi kết nối (`check_access_blocking`)
+### 4.4.2. Chức năng: Address Book — hiển thị danh sách máy theo phân quyền Group
 
-Kỹ thuật: kiểm thử hộp đen kết hợp kiểm thử ranh giới (boundary testing) trên độ trễ timeout.
+Kỹ thuật: kiểm thử hộp đen kết hợp kiểm thử phân vùng tương đương (equivalence partitioning)
+trên số lượng Group user thuộc.
 
 | Mã TC | Kịch bản | Kết quả mong đợi | Kết quả thực tế |
 |---|---|---|---|
-| TC-07 | Chưa đăng nhập, nhập ID máy đã có trong SQLite | `{allowed:false, reason:"login_required"}` → msgbox "Bạn cần đăng nhập để kết nối máy này" | ✅ Đạt |
-| TC-08 | Chưa đăng nhập, nhập ID máy KHÔNG có trong SQLite | Kết nối thành công (máy ngoài hệ thống quản lý → fail-open) | ✅ Đạt |
-| TC-09 | Đã đăng nhập, thuộc Group có quyền truy cập máy | Kết nối thành công | ✅ Đạt |
-| TC-10 | Đã đăng nhập, thuộc Group KHÔNG có quyền truy cập máy | `{allowed:false, reason:"no_permission"}` → msgbox "Bạn không có quyền truy cập máy này" | ✅ Đạt |
-| TC-11 | Token giả/rác (cấu trúc JWT đúng nhưng chữ ký sai/hết hạn) | Map về `login_required` (không còn nhầm thành `no_permission` như trước khi fix introspection) | ✅ Đạt (fix 2026-06-22) |
-| TC-12 | Tắt gateway (`server.js` offline), nhập bất kỳ ID nào | Sau tối đa 800ms timeout, vẫn cho kết nối (fail-open) | ✅ Đạt |
+| TC-07 | User thuộc 1 Group, Group có ≥ 1 máy | Address Book hiển thị đúng danh sách máy của Group đó, không hiển thị máy của Group khác | ✅ Đạt |
+| TC-08 | User thuộc 2 Group khác nhau | Address Book hiển thị tổng hợp máy của cả 2 Group (union), không bị trùng lặp bản ghi | ✅ Đạt |
+| TC-09 | User đã đăng nhập nhưng không thuộc Group nào | Danh sách máy rỗng, không hiển thị lỗi crash; panel "Tags" bên trái không có mục nào | ✅ Đạt |
+| TC-10 | Click vào tên Group trong panel lọc "Tags" bên trái | Chỉ hiển thị máy thuộc Group đó; click "Tất cả" trả về toàn bộ danh sách | ✅ Đạt |
+| TC-11 | Admin gán thêm máy mới vào Group; user đăng xuất rồi đăng nhập lại | Máy mới xuất hiện đúng trong danh sách, không cần khởi động lại ứng dụng | ✅ Đạt |
 
 ### 4.4.3. Chức năng: Đăng nhập Admin UI theo tier + 2FA
 
 | Mã TC | Kịch bản | Kết quả mong đợi | Kết quả thực tế |
 |---|---|---|---|
-| TC-13 | Đăng nhập với role `admin`, chưa từng cấu hình OTP | Hiện QR code đăng ký OTP, sau khi xác nhận mã 6 số mới vào được Admin UI | ✅ Đạt |
-| TC-14 | Đăng nhập với role `admin`, đã có OTP | Hiện form nhập mã OTP hiện tại, đúng mã mới qua | ✅ Đạt |
-| TC-15 | Đăng nhập với role `manage_users` hoặc `manage_machines` | Vào được Admin UI **không** bị bắt OTP, tab/nút hiển thị đúng theo tier (`applyTierVisibility()`) | ✅ Đạt (ghi nhận là điểm chưa siết — xem Hạn chế) |
-| TC-16 | Đăng nhập với user không có role admin-tier nào | 403 "Tài khoản không có quyền quản trị" | ✅ Đạt |
-| TC-17 | `manage_users` thử gọi `POST /admin/api/users/:id/admin-roles` | Bị chặn (`requireSuperAdmin`), chỉ admin tối cao mới gán được role admin-tier | ✅ Đạt |
+| TC-12 | Đăng nhập với role `admin`, chưa từng cấu hình OTP | Hiện QR code đăng ký OTP, sau khi xác nhận mã 6 số mới vào được Admin UI | ✅ Đạt |
+| TC-13 | Đăng nhập với role `admin`, đã có OTP | Hiện form nhập mã OTP hiện tại, đúng mã mới qua | ✅ Đạt |
+| TC-14 | Đăng nhập với role `manage_users` hoặc `manage_machines` | Vào được Admin UI **không** bị bắt OTP, tab/nút hiển thị đúng theo tier (`applyTierVisibility()`) | ✅ Đạt (ghi nhận là điểm chưa siết — xem Hạn chế) |
+| TC-15 | Đăng nhập với user không có role admin-tier nào | 403 "Tài khoản không có quyền quản trị" | ✅ Đạt |
+| TC-16 | `manage_users` thử gọi `POST /admin/api/users/:id/admin-roles` | Bị chặn (`requireSuperAdmin`), chỉ admin tối cao mới gán được role admin-tier | ✅ Đạt |
 
 ### 4.4.4. Chức năng: Web Admin UI — quản lý Group ↔ Machine
 
 | Mã TC | Kịch bản | Kết quả mong đợi | Kết quả thực tế |
 |---|---|---|---|
-| TC-18 | `GET /admin/api/groups` | Trả đúng danh sách Group kèm `machines`/`users` đã enrich | ✅ Đạt |
-| TC-19 | `PUT /admin/api/groups` với mapping mới (machine-admin thực hiện) | SQLite `machine_groups` cập nhật đúng (replace toàn bộ); `/api/address-books` của user thuộc Group đó trả đúng danh sách mới | ✅ Đạt |
-| TC-20 | Tạo / xóa machine qua `POST`/`PUT`/`DELETE /admin/api/machines` | Machine xuất hiện/biến mất khỏi cả bảng UI và SQLite, đồng thời bị gỡ khỏi mọi Group liên quan khi xóa | ✅ Đạt |
-| TC-21 | Admin tối cao tạo/xóa Group; machine-admin thử tạo/xóa Group | Tạo/xóa Group chỉ admin tối cao thực hiện được (`requireSuperAdmin`); machine-admin bị 403 | ✅ Đạt |
-| TC-22 | Logout Admin UI, mở lại `/admin` | `admin_session` cookie hết hiệu lực sau 8h hoặc sau logout, phải đăng nhập lại | ✅ Đạt |
+| TC-17 | `GET /admin/api/groups` | Trả đúng danh sách Group kèm `machines`/`users` đã enrich | ✅ Đạt |
+| TC-18 | `PUT /admin/api/groups` với mapping mới (tier `manage_machines` thực hiện) | SQLite `machine_groups` cập nhật đúng (replace toàn bộ); `/api/address-books` của user thuộc Group đó trả đúng danh sách mới | ✅ Đạt |
+| TC-19 | Tạo / sửa / xóa machine qua `POST`/`PUT`/`DELETE /admin/api/machines` | Machine xuất hiện/cập nhật/biến mất khỏi cả bảng UI và SQLite; khi xóa, máy bị gỡ khỏi mọi Group liên quan | ✅ Đạt |
+| TC-20 | Admin tối cao tạo/xóa Group; tier `manage_machines` thử tạo/xóa Group | Tạo/xóa Group chỉ admin tối cao thực hiện được (`requireSuperAdmin`); tier khác bị 403 | ✅ Đạt |
+| TC-21 | Logout Admin UI, mở lại `/admin` | `admin_session` cookie hết hiệu lực sau 8h hoặc sau logout, phải đăng nhập lại | ✅ Đạt |
 
-### 4.4.5. Tổng kết kết quả kiểm thử
+### 4.4.5. Chức năng: Web Admin UI — quản lý Người dùng
 
-- Tổng số trường hợp kiểm thử đã thực hiện: **22** (API + manual UI), tất cả đạt yêu cầu.
-- Các trường hợp kiểm thử khác (CRUD user, enable/disable, dịch ngôn ngữ, đổi theme) được kiểm
-  thử nhanh qua thao tác trực tiếp trên UI trong quá trình phát triển, không lập thành bảng riêng
+| Mã TC | Kịch bản | Kết quả mong đợi | Kết quả thực tế |
+|---|---|---|---|
+| TC-22 | Tier `manage_users` tạo user mới với username/email hợp lệ | User xuất hiện trong bảng, Keycloak tạo thành công; mật khẩu tạm được đặt đúng | ✅ Đạt |
+| TC-23 | Tier `manage_users` gán user vào Group | Group hiển thị đúng trong cột Group của user; lần đăng nhập kế tiếp của user đó, Address Book hiển thị máy thuộc Group | ✅ Đạt |
+| TC-24 | Tier `manage_users` gỡ user khỏi Group | User mất quyền truy cập máy của Group đó ngay lần đăng nhập kế tiếp; danh sách Group trong bảng cập nhật ngay | ✅ Đạt |
+| TC-25 | Tier `manage_users` tắt tài khoản (toggle Enabled → disabled) | Keycloak từ chối đăng nhập cho user bị tắt; nút toggle đổi màu/trạng thái trong bảng | ✅ Đạt |
+| TC-26 | Tier `manage_users` bật lại tài khoản đã bị tắt | User đăng nhập lại được; trạng thái bảng phản ánh đúng | ✅ Đạt |
+| TC-27 | Tier `manage_users` xóa user | User biến mất khỏi bảng và Keycloak; các Group mapping cũng được dọn phía Keycloak | ✅ Đạt |
+| TC-28 | Admin tối cao gán role `manage_users` cho user bình thường | User đó đăng nhập được Admin UI; chỉ thấy tab/nút theo tier `manage_users`; không thấy tab quản lý máy | ✅ Đạt |
+
+### 4.4.6. Tổng kết kết quả kiểm thử
+
+- Tổng số trường hợp kiểm thử đã thực hiện: **28** (API + manual UI), phân bổ qua 5 chức năng,
+  tất cả đạt yêu cầu.
+- Các trường hợp kiểm thử phụ (dịch ngôn ngữ, đổi theme, tìm kiếm trong bảng) được kiểm thử
+  nhanh qua thao tác trực tiếp trên UI trong quá trình phát triển, không lập thành bảng riêng
   do mức độ rủi ro thấp.
 - **Hạn chế còn tồn đọng** (ghi nhận trung thực để phần "Hướng phát triển" sử dụng):
   - **2FA chỉ bind với role `admin`**, chưa mở rộng cho `manage_users`/`manage_machines` sau khi
     model chuyển từ 1-role sang 3-tier — 2 tier mới có quyền quản trị thật (CRUD user/máy) nhưng
     đăng nhập không bị bắt OTP. Đây là gap đã được ghi nhận, chưa có quyết định có cố ý giữ vậy
     hay cần siết lại.
-  - Cơ chế kiểm soát truy cập (`check_access_blocking`) hiện chỉ enforce ở **client ROCKY**;
-    người dùng dùng client RustDesk gốc (không qua `check_access_blocking`) vẫn có thể bỏ qua
-    lớp kiểm soát này — giới hạn của thiết kế client-side enforcement, cần bổ sung kiểm soát ở
-    tầng rendezvous/relay server nếu muốn triển khai production nghiêm ngặt hơn.
   - 1 service account duy nhất (`rustdesk-client`) được dùng cho **mọi** lệnh gọi Keycloak Admin
     REST API (cả của Admin UI và của machine-access) — lộ `CLIENT_SECRET` ảnh hưởng cả 2 hệ.
   - Chưa kiểm thử `POST /api/address-books` với JWT thật phát sinh từ một phiên đăng nhập Google
