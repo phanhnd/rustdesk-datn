@@ -92,7 +92,7 @@ class AddressBook: Reactor.Component
             abWaitingBrowser = false;
             this.update();
         } else {
-            refreshCurrentUser();
+            getAddressBooks();
         }
     }
 

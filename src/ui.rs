@@ -630,16 +630,23 @@ impl UI {
 
     fn open_url(&self, url: String) {
         #[cfg(windows)]
-        let p = "explorer";
+        // cmd /c start is the reliable way to open URLs on Windows.
+        // explorer.exe fails silently with complex OAuth URLs (multiple query params).
+        // The empty string is the required window title argument for the start command.
+        allow_err!(std::process::Command::new("cmd")
+            .arg("/c").arg("start").arg("").arg(&url)
+            .spawn());
         #[cfg(target_os = "macos")]
-        let p = "open";
+        allow_err!(std::process::Command::new("open").arg(url).spawn());
         #[cfg(target_os = "linux")]
-        let p = if std::path::Path::new("/usr/bin/firefox").exists() {
-            "firefox"
-        } else {
-            "xdg-open"
-        };
-        allow_err!(std::process::Command::new(p).arg(url).spawn());
+        {
+            let p = if std::path::Path::new("/usr/bin/firefox").exists() {
+                "firefox"
+            } else {
+                "xdg-open"
+            };
+            allow_err!(std::process::Command::new(p).arg(url).spawn());
+        }
     }
 
     fn change_id(&self, id: String) {

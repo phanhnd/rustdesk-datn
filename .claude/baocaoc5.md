@@ -2,7 +2,7 @@ Chương 4 đã trình bày chi tiết quá trình phân tích, thiết kế, tr
 và đánh giá hệ thống ROCKY, bao gồm kiến trúc tổng thể, thiết kế giao
 diện, biểu đồ tuần tự cho các luồng xác thực và truy vấn Address Book,
 cũng như kết quả kiểm thử trên các kịch bản khác nhau. Dựa trên nền tảng
-đó, Chương 5 này tập trung làm rõ bảy giải pháp và đóng góp nổi bật nhất
+đó, Chương 5 này tập trung làm rõ tám giải pháp và đóng góp nổi bật nhất
 của đồ án. Đây là những nội dung cốt lõi tạo nên sự khác biệt của hệ
 thống ROCKY so với RustDesk bản gốc, đồng thời giải quyết các bài toán
 thực tế mà các tổ chức gặp phải khi triển khai giải pháp remote desktop
@@ -287,6 +287,39 @@ hiện chỉ bắt buộc với role admin, hai role manage_users/manage_machine
 -- vốn cũng có quyền quản trị thật -- vẫn đăng nhập được mà không bị yêu
 cầu OTP.
 
+# Đồng bộ nhận diện thương hiệu xuyên suốt ba nền tảng kỹ thuật
+
+## Bài toán
+
+Hệ thống ROCKY bao gồm ba thành phần giao diện người dùng được xây dựng trên ba nền tảng kỹ thuật hoàn toàn khác nhau: Rocky Client dùng engine Sciter để render HTML/CSS với cú pháp CSS không chuẩn; Admin UI là trang web HTML/CSS chạy trên trình duyệt; trang đăng nhập Keycloak dựa trên FreeMarker template và PatternFly CSS framework. Người dùng di chuyển qua cả ba trong một luồng làm việc điển hình -- nhân viên thông thường: mở Rocky Client → redirect sang trang đăng nhập Keycloak → xác thực thành công quay lại client; quản trị viên: mở Admin UI → redirect sang Keycloak → vào trang quản trị. Nếu màu sắc, logo và tổng thể thị giác khác nhau giữa các bước, người dùng cảm nhận mình đang dùng ba sản phẩm riêng biệt thay vì một hệ thống duy nhất.
+
+Thách thức có hai lớp. Lớp thứ nhất là kỹ thuật: mỗi nền tảng có cơ chế styling hoàn toàn khác nhau và không tương thích nhau. Sciter không hỗ trợ CSS custom properties theo chuẩn trình duyệt -- không có `:root { --var }` hay `var(--var)` -- mà phải khai báo qua cú pháp độc quyền `var(name): value` bên trong block `html {}` và đọc lại bằng `color(name)` trong file CSS. Đặc biệt, `color(name)` chỉ dùng được trong CSS thật; bên trong chuỗi TIScript hay thuộc tính SVG inline phải dùng hex literal trực tiếp. Admin UI chạy trên trình duyệt thật nên dùng CSS custom properties chuẩn trong `:root`. Keycloak dùng FreeMarker template và PatternFly CSS, phải override bằng theme con chứ không được sửa thẳng vào theme built-in -- nếu sửa trực tiếp, mỗi lần upgrade Keycloak lên version mới sẽ ghi đè hoặc xung đột toàn bộ thay đổi. Lớp thứ hai là bảo trì: nếu không có một bảng màu chung làm nguồn sự thật, mỗi lần điều chỉnh màu thương hiệu phải sửa ba nơi bằng ba cú pháp khác nhau, dễ xảy ra lệch màu tích lũy qua các lần chỉnh sửa sau này.
+
+## Giải pháp
+
+Đồ án thiết lập một bảng màu thương hiệu duy nhất (palette navy/teal) làm nguồn sự thật, sau đó ánh xạ từng token màu sang cú pháp tương ứng của từng nền tảng:
+
+| Token | Giá trị | Vai trò |
+|---|---|---|
+| accent | `#00D2D3` | teal chính -- logo, chữ ROCKY, spinner, accent dialog login |
+| button | `#58D0F8` | xanh nhạt -- icon highlight, nút và điểm nhấn phụ |
+| dark (navy) | `#111D43` | nền navy đậm -- gradient banner |
+| text | `#16234F` | chữ chính |
+| light-text | `#5C6F94` | chữ phụ/label |
+| border | `#D7E3F3` | viền input/divider |
+
+**Rocky Client (Sciter)**: toàn bộ bảng màu khai báo trong block `html { ... }` của `src/ui/common.css` theo cú pháp Sciter (`var(name): value`). Các file CSS khác đọc bằng `color(name)`. Những nơi không thể dùng `color(name)` -- fill SVG inline trong TIS, chuỗi JS bên trong TIScript -- dùng hex literal tương ứng từ bảng trên: màu accent cho dialog login (`msgbox.tis`), fill icon recording và icon máy tính (`header.tis`, `file_transfer.tis`), màu spinner loading Address Book (`ab.tis`), và nền banner popup About (`index.tis` -- dùng `linear-gradient(left,#111D43,#00D2D3)` thay vì màu đặc vì màu button quá nhạt để làm nền chữ trắng).
+
+**Admin UI (trình duyệt)**: bảng màu khai báo trong `:root { ... }` của `public/admin.html` bằng CSS custom properties chuẩn (`--accent`, `--text`, `--border`...). Giá trị đồng bộ với bảng token trên, nhưng Admin UI chọn nền sáng (`--bg: #F7FAFF`) thay vì navy đậm -- sau phản hồi thực tế về khả năng đọc khi theo dõi bảng dữ liệu dài trên nền tối. Sự khác biệt có chủ đích này được ghi nhận rõ trong tài liệu để tránh nhầm lẫn khi bảo trì.
+
+**Trang đăng nhập Keycloak**: đồ án tạo một theme con tên `rocky` kế thừa theme `keycloak` built-in qua cơ chế chuẩn (`theme.properties`: `parent=keycloak`). Nguyên tắc áp dụng là chỉ override đúng phần cần đổi -- `template.ftl` chỉ sửa khối `#kc-header` để thay logo, tiêu đề và tagline; toàn bộ layout, form đăng nhập và xử lý lỗi vẫn kế thừa nguyên bản từ theme cha. Bảng màu khai báo trong `:root { ... }` ở đầu `rocky.css` bằng CSS variables chuẩn (`--rocky-teal: #01D2D3`, `--rocky-dot: #58D0F8`...), đồng bộ với bảng token trên. File này được nạp sau `login.css` của PatternFly trong danh sách `styles` để thắng các selector trùng mà không cần copy lại toàn bộ CSS gốc. Logo lục giác nhúng qua thẻ `<img>` trong `template.ftl`. Theme được gán per-realm (`Realm Settings → Theme → Login theme = rocky`), không ảnh hưởng các realm khác dùng theme mặc định. Một điểm kỹ thuật phát sinh trong quá trình triển khai: label tiếng Việt phải đặt trong `messages_en.properties` thay vì `messages_vi.properties`, vì khi realm chưa bật Internationalization locale luôn resolve về `en` -- `messages_vi.properties` bị Keycloak bỏ qua hoàn toàn dù file tồn tại. Đưa bản dịch thẳng vào `messages_en.properties` đảm bảo hiển thị đúng bất kể cấu hình i18n của realm.
+
+Ba thành phần dùng chung hex code từ cùng một bảng màu thương hiệu, nhưng mỗi thành phần khai báo theo cú pháp của nền tảng mình -- không thành phần nào phải dùng cú pháp của thành phần khác. Đây là điểm mấu chốt: mỗi thành phần tiếp tục tuân thủ quy tắc của nền tảng riêng trong khi vẫn cho ra màu sắc đồng nhất từ góc nhìn người dùng.
+
+## Kết quả đạt được
+
+Người dùng trải qua một luồng thị giác liền mạch: logo lục giác sáu chấm, màu teal/cyan làm màu nhấn, và tone navy xuất hiện nhất quán từ màn hình Rocky Client, qua trang đăng nhập Keycloak, đến Admin UI -- không còn điểm đứt gãy thương hiệu khi chuyển qua lại giữa các thành phần. Vì toàn bộ thay đổi Keycloak đi qua cơ chế kế thừa theme chuẩn, việc upgrade Keycloak lên version mới không làm mất branding hay phát sinh xung đột file. Về mặt bảo trì, cấu trúc token hoá màu sắc -- một bảng màu duy nhất ánh xạ sang ba cú pháp tương ứng -- đảm bảo rằng nếu cần điều chỉnh màu trong tương lai, người phát triển chỉ cần xác định đúng token và cập nhật tại ba file khai báo (`common.css`, `admin.html`, `rocky.css`), thay vì tìm kiếm hex literal rải rác trong toàn bộ codebase. Hạn chế còn ghi nhận trung thực: Admin UI chủ ý dùng nền sáng thay vì navy để đảm bảo khả năng đọc bảng dữ liệu -- đây là sự khác biệt có chủ đích, được chấp nhận; tiêu đề và tagline trong Keycloak theme hiện đang hardcode cho một thương hiệu duy nhất, nên nếu sau này cần branding riêng cho realm thứ hai sẽ phải copy nguyên thư mục theme thay vì tham số hoá -- đánh đổi được chấp nhận vì hệ thống hiện chỉ vận hành một thương hiệu.
+
 # Tùy biến mã nguồn mở RustDesk bảo toàn khả năng cập nhật lâu dài
 
 ## Bài toán
@@ -319,66 +352,6 @@ diện tùy biến được tách biệt hoàn toàn nên dễ dàng xác địn
 quyết xung đột nếu có. Mô hình này có thể tái sử dụng như một hướng dẫn
 thực hành tốt cho bất kỳ tổ chức nào muốn xây dựng phiên bản branded của
 RustDesk.
-
-# Tùy biến giao diện đăng nhập Keycloak theo bộ nhận diện ROCKY mà không sửa theme gốc
-
-## Bài toán
-
-Toàn bộ luồng xác thực của ROCKY -- cả desktop client (mục 5.1) và Admin
-UI -- đều redirect người dùng sang trang đăng nhập do Keycloak host.
-Theme mặc định của Keycloak mang branding gốc (logo, tên, layout
-PatternFly), tạo một điểm đứt gãy nhận diện thương hiệu ngay giữa luồng:
-người dùng rời giao diện ROCKY (desktop hoặc Admin UI) để đăng nhập trên
-một trang trông hoàn toàn khác, rồi mới được đưa trở lại. Theme đó cũng
-không có sẵn label tiếng Việt.
-
-Ràng buộc kỹ thuật quan trọng nhất không phải là đổi màu/logo, mà là đổi
-theo cách nào để không sửa trực tiếp theme built-in của Keycloak -- nếu
-sửa thẳng vào theme gốc, lần upgrade Keycloak lên version mới sẽ ghi đè
-hoặc xung đột với toàn bộ thay đổi.
-
-## Giải pháp
-
-Đồ án tạo một theme con tên `rocky`, kế thừa theme `keycloak` có sẵn qua
-cơ chế chuẩn của Keycloak (`theme.properties`: `parent=keycloak`), áp
-dụng đúng nguyên tắc tập trung hóa điểm can thiệp đã dùng cho RustDesk
-client (mục 6), lần này cho một thành phần mã nguồn mở khác:
-
-1.  **Chỉ override phần cần đổi, phần còn lại tự kế thừa nguyên bản**:
-    `template.ftl` chỉ sửa khối `#kc-header` để thay logo, tiêu đề và
-    tagline; toàn bộ layout, form đăng nhập, xử lý lỗi... vẫn lấy từ
-    theme `keycloak` gốc. CSS riêng (`rocky.css`) được nạp sau
-    `login.css` trong danh sách `styles` để thắng các selector trùng,
-    thay vì phải copy lại toàn bộ CSS gốc.
-
-2.  **Màu sắc khai báo tập trung qua biến CSS** (`--rocky-teal`,
-    `--rocky-teal-dark`, `--rocky-dot`, `--rocky-tagline`, `--rocky-bg`)
-    ở đầu `rocky.css`, đồng bộ với bảng màu navy/teal đã dùng cho
-    desktop client và Admin UI, thay vì rải hex code trực tiếp trong
-    từng selector.
-
-3.  **Phát hiện và xử lý một lỗi hiển thị tiếng Việt thực tế**: bản dịch
-    đặt ở `messages_vi.properties` bị Keycloak bỏ qua hoàn toàn khi realm
-    chưa bật Internationalization, vì lúc đó locale luôn resolve về
-    `en`. Khắc phục bằng cách đưa thẳng label tiếng Việt vào
-    `messages_en.properties` -- đảm bảo hiển thị đúng tiếng Việt bất kể
-    realm có bật i18n hay không, không phụ thuộc cấu hình thủ công thêm.
-
-4.  Theme được gán theo từng realm (`Realm Settings → Theme → Login
-    theme = rocky`), không ảnh hưởng các realm khác dùng theme mặc định.
-
-## Kết quả đạt được
-
-Trang đăng nhập Keycloak hiển thị đúng bộ nhận diện ROCKY (logo lục
-giác, tagline, màu teal/cyan) và toàn bộ label tiếng Việt, xoá điểm đứt
-gãy thương hiệu giữa desktop client, trang login và Admin UI. Vì mọi
-thay đổi đi qua cơ chế kế thừa theme chuẩn của Keycloak thay vì sửa theme
-built-in, việc upgrade Keycloak lên version mới không làm mất branding
-hay phát sinh xung đột file. Hạn chế còn ghi nhận trung thực: tiêu đề và
-tagline hiện đang hard-code cho một thương hiệu (ROCKY) ngay trong theme,
-nên nếu sau này cần một thương hiệu khác cho realm thứ hai sẽ phải copy
-nguyên thư mục theme thay vì tham số hoá -- một đánh đổi được chấp nhận
-vì hệ thống hiện chỉ vận hành một thương hiệu duy nhất.
 
 # Làm chủ toàn bộ chuỗi build – modify – đóng gói mã nguồn RustDesk đa nền tảng
 
